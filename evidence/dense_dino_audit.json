@@ -1,0 +1,134 @@
+{
+  "schema_version": "nero.smolvla.dino_dense_jc_parity.audit.v1",
+  "base_source_commit": "736299d607882176391b97be24edd616d53864cb",
+  "base_checkpoint": "${LOCAL_ARTIFACTS}/pretrained_model",
+  "base_model_sha256": "c4f8083206740370ff8ea552fa54c8c9068581c56b94b3f6a6a58705bf3068e7",
+  "dense_warmstart": {
+    "path": "${LOCAL_ARTIFACTS}/pretrained_model",
+    "model_sha256": "a36607bdccd66841e692def554fdc6e3846e5985f8648e21fb043164ae5e28d0",
+    "config_sha256": "67c938835addd905f8023bf23aa14f971e404f5dcfecf0bebaf20970d1516dd7",
+    "manifest_sha256": "d46886797fc5cf85a7d92f3e893d32d62e10aa052f06f30b38c7369082fc7e46",
+    "old_tensor_load": "all base tensors loaded with no missing, unexpected, disappeared, or shape-drifted keys",
+    "new_dense_tensor_count": 196,
+    "zero_gate_verified": true
+  },
+  "vlm_config_processor_snapshot": "${LOCAL_ARTIFACTS}/7b375e1b73b11138ff12fe22c8f2822d8fe03467",
+  "dataset": "${LOCAL_ARTIFACTS}/nero_20260803_selected66_10hz",
+  "dataset_episodes": 66,
+  "dataset_frames": 23283,
+  "training_fps": 10,
+  "history_observations": 1,
+  "public_policy_input": "RGB image + absolute xyz3+rotation6D6+canonical_hand16 (25D)",
+  "network_action_target": "fixed-anchor relative xyz3+rotation6D6+absolute_hand16 (25D)",
+  "public_policy_output": "absolute xyz3+rotation6D6+canonical_hand16 (16x25D)",
+  "deployment_output": "absolute xyz3+quaternion_xyzw4+hardware_active_hand16 (16x23D)",
+  "chunk_size": 16,
+  "online_execution_steps": 6,
+  "relative_pose_convention": "jc_world_fixed_anchor_rotation6d_v1",
+  "normalization": "JC limits [-1,1], range_eps=1e-4",
+  "global_vision_branch": {
+    "backbone": "SmolVLM2-500M SigLIP connector",
+    "input": "same complete 720x1280 RGB frame",
+    "preprocessing": "aspect-preserving resize to 512x288 then top-pad to 512x512",
+    "semantic_tokens": 64,
+    "frozen": true
+  },
+  "dense_vision_branch": {
+    "backbone": "dinov2_vitb14",
+    "source_repository": "third_party/dinov2",
+    "source_repository_sha256": "440f0a6b190bf80ed2801498ff7e0ed3b5bfe13dc9860cdf82ec3b5f77745dc6",
+    "weights": "${LOCAL_ARTIFACTS}/dinov2_vitb14_pretrain.pth",
+    "weights_sha256": "0b8b82f85de91b424aded121c7e1dcc2b7bc6d0adeea651bf73a13307fad8c73",
+    "input": "same complete 720x1280 RGB frame before SmolVLM resize/pad",
+    "workspace_roi_xyxy": [
+      480,
+      0,
+      1200,
+      720
+    ],
+    "roi_selection": "fixed 720x720 workspace spanning bottle pickup, bread manipulation, and put-down regions across sampled episodes 0,20,60",
+    "resize": [
+      518,
+      518
+    ],
+    "patch_size": 14,
+    "patch_grid": [
+      37,
+      37
+    ],
+    "dense_tokens": 1369,
+    "feature_dim": 768,
+    "backbone_frozen": true,
+    "backbone_dtype": "bfloat16",
+    "train_preprocessing": "JC-matched ImageNet normalization and ColorJitter",
+    "inference_preprocessing": "ImageNet normalization only"
+  },
+  "fusion": {
+    "location": "after final action-expert suffix output and before action_out_proj",
+    "query": "16 action tokens x 720",
+    "key_value": "1369 projected DINO tokens x 720",
+    "heads": 8,
+    "residual_gate": "per-channel tanh gate, initialized exactly to zero",
+    "warmstart_invariant": "dense branch has exactly zero contribution before optimization",
+    "inference_cache": "DINO is encoded once and its cross-attention K/V projections are reused for all 10 denoising steps"
+  },
+  "training_stages": [
+    {
+      "config": "train_selected66_8gpu_dense_dino_stage1_50ep.json",
+      "epochs": 50,
+      "trainable": "DINO projection adapter, dense cross-attention, residual gate",
+      "frozen": "DINO backbone and every pre-existing SmolVLA parameter",
+      "learning_rate": 0.0001
+    },
+    {
+      "config": "train_selected66_8gpu_dense_dino_stage2_100ep.json",
+      "epochs": 100,
+      "trainable": "action expert, state/action projections, DINO projection adapter, dense cross-attention, residual gate",
+      "frozen": "SmolVLM and DINO backbones",
+      "learning_rate": 2e-05
+    }
+  ],
+  "validation_split": 0.0,
+  "test_split": 0.0,
+  "stage1_output": "${LOCAL_ARTIFACTS}/stage1_50ep_20260805",
+  "stage2_output": "${LOCAL_ARTIFACTS}/stage2_100ep_20260805",
+  "stage1_final_checkpoint": {
+    "path": "${LOCAL_ARTIFACTS}/pretrained_model",
+    "model_sha256": "c908b3f9f2b42ff5f9b9dc449f9acea82a7c439e3253151d082850665d956923",
+    "config_sha256": "812bf987b690f14d340781891fba80f2e41ce8c1a1315d46b07c456fff9a8b17",
+    "steps": 18200,
+    "num_processes": 8,
+    "batch_size_per_process": 8
+  },
+  "output_storage_reason": "The root filesystem had about 170 GiB free while /data had about 32 GiB; no existing files were deleted.",
+  "verification": {
+    "unit_tests": "32 passed",
+    "real_fixed_noise_equivalence_action_shape": [
+      1,
+      16,
+      25
+    ],
+    "real_fixed_noise_equivalence_max_abs": 0.0,
+    "rotation6d_output_validated": true,
+    "training_backward_action_shape": [
+      1,
+      16,
+      25
+    ],
+    "training_backward_loss": 0.0017961503472179174,
+    "stage1_trainable_tensor_count": 21,
+    "stage1_trainable_parameter_count": 3155760,
+    "stage1_base_policy_frozen": true,
+    "stage1_dino_backbone_frozen": true,
+    "stage1_gate_gradient_norm": 0.0011723091593012214,
+    "stage2_backward_loss": 0.0016943755326792598,
+    "stage2_trainable_tensor_count": 176,
+    "stage2_trainable_parameter_count": 103019945,
+    "stage2_smolvlm_frozen": true,
+    "stage2_dino_backbone_frozen": true,
+    "stage2_action_expert_gradient_norm": 0.0006135535077191889,
+    "stage2_dense_adapter_gradient_norm": 0.0008682240732014179,
+    "stage2_gate_gradient_norm": 0.002538827480748296
+  },
+  "contract_note": "The visual branch is internal. Rotation6D conversion, canonical hand order, relative-pose reconstruction, policy action shape, and deployment adapter boundary are unchanged."
+}

@@ -1,0 +1,483 @@
+--- a/src/lerobot/policies/smolvla/configuration_smolvla.py
++++ b/src/lerobot/policies/smolvla/configuration_smolvla.py
+@@ -12,6 +12,7 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import math
+ from dataclasses import dataclass, field
+ 
+ from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
+@@ -19,6 +20,13 @@
+ from lerobot.utils.constants import OBS_IMAGES
+ 
+ from ..rtc.configuration_rtc import RTCConfig
++from .relative_pose import (
++    INTERNAL_DIM,
++    JC_CANONICAL_ROTATION6D_IO,
++    RELATIVE_POSE_CONVENTION,
++    RELATIVE_POSE_INFERENCE_IO_MODES,
++    validate_compact_feature_names,
++)
+ 
+ 
+ @PreTrainedConfig.register_subclass("smolvla")
+@@ -70,6 +78,31 @@
+     train_expert_only: bool = True
+     train_state_proj: bool = True
+ 
++    # Optional JC-parity dense workspace branch.  It consumes the same raw RGB
++    # observation as SmolVLM, crops a fixed workspace ROI, and fuses frozen
++    # DINOv2 patch tokens into the action expert immediately before
++    # action_out_proj.  Paths may differ across machines, while the source and
++    # weight hashes keep the executable assets pinned.
++    dense_vision_enabled: bool = False
++    dense_vision_contract: str | None = None
++    dense_vision_image_key: str = "observation.images.head"
++    dense_vision_repository: str | None = None
++    dense_vision_repository_sha256: str | None = None
++    dense_vision_weights_path: str | None = None
++    dense_vision_weights_sha256: str | None = None
++    dense_vision_model_type: str = "dinov2_vitb14"
++    dense_vision_roi_xyxy: tuple[int, int, int, int] = (480, 0, 1200, 720)
++    dense_vision_image_size: int = 518
++    dense_vision_patch_size: int = 14
++    dense_vision_freeze_backbone: bool = True
++    dense_vision_backbone_dtype: str = "bfloat16"
++    dense_vision_color_jitter: bool = True
++    dense_vision_adapter_dropout: float = 0.1
++    dense_vision_cross_attention_heads: int = 8
++    dense_vision_cross_attention_dropout: float = 0.1
++    dense_vision_gate_init: float = 0.0
++    dense_vision_freeze_base_policy: bool = False
++
+     # Training presets
+     optimizer_lr: float = 1e-4
+     optimizer_betas: tuple[float, float] = (0.9, 0.95)
+@@ -99,6 +132,90 @@
+ 
+     min_period: float = 4e-3  # sensitivity range for the timestep used in sine-cosine positional encoding
+     max_period: float = 4.0
++
++    # Optional semantic grouping for action losses. When configured, each group is
++    # reduced independently before the weighted group means are combined. This
++    # prevents large groups (for example, a 20-DoF hand) from dominating smaller
++    # groups solely because they contain more scalar dimensions.
++    action_loss_groups: dict[str, list[int]] | None = None
++    action_loss_group_weights: dict[str, float] | None = None
++    # Optional action dimensions containing normalized binary validity flags for
++    # each group. With MEAN_STD-normalized 0/1 flags, valid entries are >= 0.
++    action_loss_validity_indices: dict[str, int] | None = None
++    action_loss_validity_threshold: float = 0.0
++    # Optional per-horizon weights for grouped flow-matching losses. Each list
++    # must have exactly ``chunk_size`` entries and is normalized by its own
++    # weighted valid count, so changing the shape of the weighting schedule
++    # does not silently change the overall group scale.
++    action_loss_horizon_weights: dict[str, list[float]] | None = None
++    # LeRobot marks episode-tail repetitions in ``action_is_pad``. Most
++    # policies exclude those values from the loss. JC's SequenceSampler instead
++    # repeats the final action and supervises every horizon, so its parity
++    # configuration sets this to False.
++    mask_padded_actions: bool = True
++
++    # Optional XYZ representation in which each future absolute wrist position
++    # is encoded as a cumulative world-frame displacement from the current
++    # observation state. The policy converts the already-normalized absolute
++    # action/state tensors to this representation internally and converts model
++    # outputs back to normalized absolute actions before the regular
++    # postprocessor. This keeps the public 35-D action contract unchanged.
++    relative_xyz_enabled: bool = False
++    relative_xyz_group: str = "xyz"
++    relative_xyz_action_indices: list[int] = field(default_factory=lambda: [1, 2, 3])
++    relative_xyz_state_indices: list[int] = field(default_factory=lambda: [1, 2, 3])
++    relative_xyz_state_validity_index: int | None = 0
++    relative_xyz_action_mean: list[float] | None = None
++    relative_xyz_action_std: list[float] | None = None
++    relative_xyz_state_mean: list[float] | None = None
++    relative_xyz_state_std: list[float] | None = None
++    relative_xyz_delta_mean: list[float] | None = None
++    relative_xyz_delta_std: list[float] | None = None
++
++    # JC-compatible Nero pose representation. During training the processor
++    # leaves the compact parquet state/action tensors unnormalized and SmolVLA
++    # maps them to absolute xyz+rotation6D+hand state and world-relative
++    # xyz+rotation6D+absolute-hand action. Both representations remain 25-D.
++    # Online inference can expose JC's canonical rotation6D boundary or the
++    # older compact-quaternion compatibility boundary; the choice is explicit
++    # because both layouts happen to contain 25 scalars.
++    relative_pose_rotation6d_enabled: bool = False
++    relative_pose_convention: str | None = None
++    relative_pose_inference_io_mode: str = "compact_quaternion"
++    relative_pose_state_feature_names: list[str] | None = None
++    relative_pose_action_feature_names: list[str] | None = None
++    relative_pose_normalization_mode: str = "mean_std"
++    relative_pose_state_mean: list[float] | None = None
++    relative_pose_state_std: list[float] | None = None
++    relative_pose_action_mean: list[float] | None = None
++    relative_pose_action_std: list[float] | None = None
++    relative_pose_state_min: list[float] | None = None
++    relative_pose_state_max: list[float] | None = None
++    relative_pose_action_min: list[float] | None = None
++    relative_pose_action_max: list[float] | None = None
++    relative_pose_normalization_range_eps: float = 1e-4
++    relative_pose_validate_training_values: bool = False
++    relative_pose_quaternion_norm_tolerance: float | None = None
++    relative_pose_validity_threshold: float = 0.5
++    relative_pose_eps: float = 1e-8
++    # SHA256 of the complete statistics/provenance manifest used to populate
++    # the selected normalization arrays. Stored in every checkpoint for auditability.
++    relative_pose_stats_manifest_sha256: str | None = None
++
++    # Extra supervision on the reconstructed clean relative XYZ at the first
++    # action horizon. This anchors the beginning of the chunk to the true next
++    # state; it does not force the first action to equal the current state.
++    relative_xyz_anchor_weight: float = 0.0
++    relative_xyz_anchor_huber_beta: float = 0.25
++
++    # Optional sign-invariant quaternion geometry loss. The group identifies the
++    # four quaternion dimensions. Mean/std are required to map the reconstructed
++    # normalized action back to physical quaternion components before unit-norm
++    # projection and geometry evaluation.
++    quaternion_geodesic_group: str | None = None
++    quaternion_geodesic_weight: float = 0.0
++    quaternion_action_mean: list[float] | None = None
++    quaternion_action_std: list[float] | None = None
+ 
+     # Real-Time Chunking (RTC) configuration
+     rtc_config: RTCConfig | None = None
+@@ -120,6 +237,306 @@
+                 "`use_delta_joint_actions_aloha` is used by smolvla for aloha real models. It is not ported yet in LeRobot."
+             )
+ 
++        if self.dense_vision_enabled:
++            expected_contract = "nero_smolvla_dino_dense_jc_parity_v1"
++            if self.dense_vision_contract != expected_contract:
++                raise ValueError(
++                    f"dense vision requires contract {expected_contract!r}; "
++                    f"got {self.dense_vision_contract!r}"
++                )
++            if not self.relative_pose_rotation6d_enabled:
++                raise ValueError("JC dense vision requires rotation6D relative-pose training")
++            if self.relative_pose_inference_io_mode != JC_CANONICAL_ROTATION6D_IO:
++                raise ValueError("JC dense vision requires the canonical rotation6D online boundary")
++            if self.relative_pose_normalization_mode != "limits":
++                raise ValueError("JC dense vision requires limits normalization")
++            if (
++                self.chunk_size != 16
++                or self.n_action_steps != 6
++                or self.max_state_dim != INTERNAL_DIM
++                or self.max_action_dim != INTERNAL_DIM
++            ):
++                raise ValueError("JC dense vision requires state/action25, chunk16, and n_action_steps6")
++            if self.n_obs_steps != 1:
++                raise ValueError("JC dense vision v1 consumes exactly one current observation")
++            if self.dense_vision_image_key != "observation.images.head":
++                raise ValueError("JC dense vision v1 requires observation.images.head")
++            for field_name in ("dense_vision_repository", "dense_vision_weights_path"):
++                if not getattr(self, field_name):
++                    raise ValueError(f"`{field_name}` is required when dense vision is enabled")
++            for field_name in (
++                "dense_vision_repository_sha256",
++                "dense_vision_weights_sha256",
++            ):
++                value = getattr(self, field_name)
++                if (
++                    not isinstance(value, str)
++                    or len(value) != 64
++                    or any(character not in "0123456789abcdefABCDEF" for character in value)
++                ):
++                    raise ValueError(f"`{field_name}` must be a 64-character SHA256")
++            if self.dense_vision_model_type != "dinov2_vitb14":
++                raise ValueError("JC dense vision v1 is pinned to DINOv2-B/14")
++            if self.dense_vision_image_size != 518 or self.dense_vision_patch_size != 14:
++                raise ValueError("JC dense vision v1 requires 518px input and 14px DINO patches")
++            if tuple(self.dense_vision_roi_xyxy) != (480, 0, 1200, 720):
++                raise ValueError("JC dense vision v1 requires the audited workspace ROI (480,0,1200,720)")
++            if not self.dense_vision_freeze_backbone:
++                raise ValueError("JC dense vision v1 keeps the DINOv2 backbone frozen")
++            if self.dense_vision_backbone_dtype != "bfloat16":
++                raise ValueError("JC dense vision v1 requires a BF16 DINOv2 backbone")
++            if not self.dense_vision_color_jitter:
++                raise ValueError("JC dense vision v1 requires JC-matched training color jitter")
++            for field_name in (
++                "dense_vision_adapter_dropout",
++                "dense_vision_cross_attention_dropout",
++            ):
++                value = getattr(self, field_name)
++                if not math.isfinite(value) or not 0.0 <= value < 1.0:
++                    raise ValueError(f"`{field_name}` must be finite and in [0,1)")
++            if self.dense_vision_cross_attention_heads <= 0:
++                raise ValueError("dense cross-attention heads must be positive")
++            if self.dense_vision_gate_init != 0.0:
++                raise ValueError("JC dense vision requires a zero-initialized residual gate")
++        elif self.dense_vision_freeze_base_policy:
++            raise ValueError("the base policy can only be frozen when dense vision is enabled")
++
++        if self.action_loss_groups is not None:
++            if not self.action_loss_groups:
++                raise ValueError("`action_loss_groups` must contain at least one non-empty group.")
++
++            seen_indices: set[int] = set()
++            for group_name, indices in self.action_loss_groups.items():
++                if not indices:
++                    raise ValueError(f"Action loss group {group_name!r} is empty.")
++                for index in indices:
++                    if index < 0 or index >= self.max_action_dim:
++                        raise ValueError(
++                            f"Action loss index {index} in group {group_name!r} is outside "
++                            f"[0, {self.max_action_dim})."
++                        )
++                    if index in seen_indices:
++                        raise ValueError(f"Action loss index {index} is present in multiple groups.")
++                    seen_indices.add(index)
++
++            if self.action_loss_group_weights is not None:
++                unknown_weights = set(self.action_loss_group_weights) - set(self.action_loss_groups)
++                if unknown_weights:
++                    raise ValueError(
++                        f"Weights were provided for unknown action loss groups: {unknown_weights}"
++                    )
++                if any(weight < 0 for weight in self.action_loss_group_weights.values()):
++                    raise ValueError("Action loss group weights must be non-negative.")
++                if (
++                    sum(self.action_loss_group_weights.get(name, 1.0) for name in self.action_loss_groups)
++                    <= 0
++                ):
++                    raise ValueError("At least one action loss group must have positive weight.")
++
++            if self.action_loss_validity_indices is not None:
++                unknown_validity_groups = set(self.action_loss_validity_indices) - set(
++                    self.action_loss_groups
++                )
++                if unknown_validity_groups:
++                    raise ValueError(
++                        f"Validity indices were provided for unknown action loss groups: {unknown_validity_groups}"
++                    )
++                for group_name, index in self.action_loss_validity_indices.items():
++                    if index < 0 or index >= self.max_action_dim:
++                        raise ValueError(
++                            f"Validity index {index} for group {group_name!r} is outside "
++                            f"[0, {self.max_action_dim})."
++                        )
++
++            if self.action_loss_horizon_weights is not None:
++                unknown_horizon_groups = set(self.action_loss_horizon_weights) - set(self.action_loss_groups)
++                if unknown_horizon_groups:
++                    raise ValueError(
++                        f"Horizon weights were provided for unknown action loss groups: {unknown_horizon_groups}"
++                    )
++                for group_name, horizon_weights in self.action_loss_horizon_weights.items():
++                    if len(horizon_weights) != self.chunk_size:
++                        raise ValueError(
++                            f"Horizon weights for group {group_name!r} must contain exactly "
++                            f"{self.chunk_size} entries."
++                        )
++                    if any(weight < 0 for weight in horizon_weights) or sum(horizon_weights) <= 0:
++                        raise ValueError(
++                            f"Horizon weights for group {group_name!r} must be non-negative "
++                            "with a positive sum."
++                        )
++
++        if self.relative_xyz_anchor_weight < 0:
++            raise ValueError("`relative_xyz_anchor_weight` must be non-negative.")
++        if self.relative_xyz_anchor_huber_beta <= 0:
++            raise ValueError("`relative_xyz_anchor_huber_beta` must be positive.")
++        if self.relative_xyz_enabled:
++            if self.action_loss_groups is None or self.relative_xyz_group not in self.action_loss_groups:
++                raise ValueError("Relative XYZ requires a valid `relative_xyz_group`.")
++            action_indices = self.relative_xyz_action_indices
++            state_indices = self.relative_xyz_state_indices
++            if len(action_indices) != 3 or len(state_indices) != 3:
++                raise ValueError("Relative XYZ action/state indices must each contain exactly three entries.")
++            if len(set(action_indices)) != 3 or len(set(state_indices)) != 3:
++                raise ValueError("Relative XYZ action/state indices must be unique.")
++            if any(index < 0 or index >= self.max_action_dim for index in action_indices):
++                raise ValueError("Relative XYZ action indices are outside the configured action dimension.")
++            if any(index < 0 or index >= self.max_state_dim for index in state_indices):
++                raise ValueError("Relative XYZ state indices are outside the configured state dimension.")
++            if self.action_loss_groups[self.relative_xyz_group] != action_indices:
++                raise ValueError(
++                    "The relative XYZ action indices must exactly match the configured relative XYZ loss group."
++                )
++            if self.relative_xyz_state_validity_index is not None and not (
++                0 <= self.relative_xyz_state_validity_index < self.max_state_dim
++            ):
++                raise ValueError(
++                    "Relative XYZ state validity index is outside the configured state dimension."
++                )
++
++            stat_fields = {
++                "relative_xyz_action_mean": self.relative_xyz_action_mean,
++                "relative_xyz_action_std": self.relative_xyz_action_std,
++                "relative_xyz_state_mean": self.relative_xyz_state_mean,
++                "relative_xyz_state_std": self.relative_xyz_state_std,
++                "relative_xyz_delta_mean": self.relative_xyz_delta_mean,
++                "relative_xyz_delta_std": self.relative_xyz_delta_std,
++            }
++            for field_name, values in stat_fields.items():
++                if values is None or len(values) != 3:
++                    raise ValueError(f"`{field_name}` must contain exactly three values.")
++            for field_name in (
++                "relative_xyz_action_std",
++                "relative_xyz_state_std",
++                "relative_xyz_delta_std",
++            ):
++                if any(value <= 0 for value in stat_fields[field_name]):
++                    raise ValueError(f"`{field_name}` values must be positive.")
++        elif self.relative_xyz_anchor_weight > 0:
++            raise ValueError("Relative XYZ anchoring requires `relative_xyz_enabled=True`.")
++
++        if self.quaternion_geodesic_weight < 0:
++            raise ValueError("`quaternion_geodesic_weight` must be non-negative.")
++        if self.quaternion_geodesic_weight > 0:
++            if (
++                self.action_loss_groups is None
++                or self.quaternion_geodesic_group not in self.action_loss_groups
++            ):
++                raise ValueError("Quaternion geometry loss requires a valid `quaternion_geodesic_group`.")
++            quaternion_indices = self.action_loss_groups[self.quaternion_geodesic_group]
++            if len(quaternion_indices) != 4:
++                raise ValueError("Quaternion geometry loss requires exactly four action dimensions.")
++            if self.quaternion_action_mean is None or self.quaternion_action_std is None:
++                raise ValueError(
++                    "Quaternion geometry loss requires `quaternion_action_mean` and `quaternion_action_std`."
++                )
++            if len(self.quaternion_action_mean) != 4 or len(self.quaternion_action_std) != 4:
++                raise ValueError("Quaternion mean and std must each contain four values.")
++            if any(std <= 0 for std in self.quaternion_action_std):
++                raise ValueError("Quaternion action standard deviations must be positive.")
++
++        if self.relative_pose_rotation6d_enabled:
++            if self.relative_pose_convention != RELATIVE_POSE_CONVENTION:
++                raise ValueError(
++                    "Rotation6D relative pose requires the exact audited convention "
++                    f"{RELATIVE_POSE_CONVENTION!r}; got {self.relative_pose_convention!r}."
++                )
++            if self.relative_xyz_enabled:
++                raise ValueError("Rotation6D relative pose and relative XYZ modes are mutually exclusive.")
++            for feature_type in ("STATE", "ACTION"):
++                if self.normalization_mapping.get(feature_type) != NormalizationMode.IDENTITY:
++                    raise ValueError(
++                        "Rotation6D relative pose performs its own audited normalization; "
++                        f"normalization_mapping[{feature_type!r}] must be IDENTITY."
++                    )
++            if self.adapt_to_pi_aloha or self.use_delta_joint_actions_aloha:
++                raise ValueError("Rotation6D relative pose is incompatible with Aloha action adaptation.")
++            if self.rtc_config is not None and self.rtc_config.enabled:
++                raise ValueError(
++                    "RTC cannot combine chunks encoded against different pose anchors; disable RTC "
++                    "for rotation6D relative-pose inference."
++                )
++            if self.quaternion_geodesic_weight > 0:
++                raise ValueError("Quaternion geodesic loss does not apply to the rotation6D action layout.")
++            if self.action_loss_validity_indices:
++                raise ValueError(
++                    "The internal rotation6D layout contains no validity dimensions; validity is checked "
++                    "at the compact training-data boundary."
++                )
++            if self.relative_pose_inference_io_mode not in RELATIVE_POSE_INFERENCE_IO_MODES:
++                raise ValueError(
++                    "`relative_pose_inference_io_mode` must be one of "
++                    f"{sorted(RELATIVE_POSE_INFERENCE_IO_MODES)}; got "
++                    f"{self.relative_pose_inference_io_mode!r}."
++                )
++            if self.relative_pose_normalization_mode not in {"mean_std", "limits"}:
++                raise ValueError("`relative_pose_normalization_mode` must be either 'mean_std' or 'limits'.")
++            if not 0.0 <= self.relative_pose_validity_threshold < 1.0:
++                raise ValueError("`relative_pose_validity_threshold` must be in [0, 1).")
++            if not math.isfinite(self.relative_pose_eps) or self.relative_pose_eps <= 0:
++                raise ValueError("`relative_pose_eps` must be finite and positive.")
++            if (
++                not math.isfinite(self.relative_pose_normalization_range_eps)
++                or self.relative_pose_normalization_range_eps <= 0
++            ):
++                raise ValueError("`relative_pose_normalization_range_eps` must be finite and positive.")
++            if self.relative_pose_quaternion_norm_tolerance is not None and (
++                not math.isfinite(self.relative_pose_quaternion_norm_tolerance)
++                or self.relative_pose_quaternion_norm_tolerance < 0
++            ):
++                raise ValueError("`relative_pose_quaternion_norm_tolerance` must be finite and non-negative.")
++            if self.max_state_dim < INTERNAL_DIM or self.max_action_dim < INTERNAL_DIM:
++                raise ValueError(
++                    f"Rotation6D relative pose requires max state/action dimensions >= {INTERNAL_DIM}."
++                )
++
++            if self.relative_pose_state_feature_names is None:
++                raise ValueError("`relative_pose_state_feature_names` is required.")
++            if self.relative_pose_action_feature_names is None:
++                raise ValueError("`relative_pose_action_feature_names` is required.")
++            validate_compact_feature_names(self.relative_pose_state_feature_names)
++            validate_compact_feature_names(self.relative_pose_action_feature_names)
++
++            if self.relative_pose_normalization_mode == "mean_std":
++                stat_fields = {
++                    "relative_pose_state_mean": self.relative_pose_state_mean,
++                    "relative_pose_state_std": self.relative_pose_state_std,
++                    "relative_pose_action_mean": self.relative_pose_action_mean,
++                    "relative_pose_action_std": self.relative_pose_action_std,
++                }
++            else:
++                stat_fields = {
++                    "relative_pose_state_min": self.relative_pose_state_min,
++                    "relative_pose_state_max": self.relative_pose_state_max,
++                    "relative_pose_action_min": self.relative_pose_action_min,
++                    "relative_pose_action_max": self.relative_pose_action_max,
++                }
++            for field_name, values in stat_fields.items():
++                if values is None or len(values) != INTERNAL_DIM:
++                    raise ValueError(f"`{field_name}` must contain exactly {INTERNAL_DIM} values.")
++                if not all(math.isfinite(value) for value in values):
++                    raise ValueError(f"`{field_name}` must contain only finite values.")
++            if self.relative_pose_normalization_mode == "mean_std":
++                for field_name in ("relative_pose_state_std", "relative_pose_action_std"):
++                    if any(value <= self.relative_pose_eps for value in stat_fields[field_name]):
++                        raise ValueError(
++                            f"Every `{field_name}` value must be greater than `relative_pose_eps`."
++                        )
++            else:
++                for prefix in ("relative_pose_state", "relative_pose_action"):
++                    minimum = stat_fields[f"{prefix}_min"]
++                    maximum = stat_fields[f"{prefix}_max"]
++                    if any(
++                        maximum_value < minimum_value
++                        for minimum_value, maximum_value in zip(minimum, maximum, strict=True)
++                    ):
++                        raise ValueError(f"Every `{prefix}_max` value must be >= `{prefix}_min`.")
++            if (
++                not self.relative_pose_stats_manifest_sha256
++                or len(self.relative_pose_stats_manifest_sha256) != 64
++            ):
++                raise ValueError("A 64-character `relative_pose_stats_manifest_sha256` is required.")
++
+     def validate_features(self) -> None:
+         for i in range(self.empty_cameras):
+             key = f"{OBS_IMAGES}.empty_camera_{i}"
+@@ -129,6 +546,28 @@
+             )
+             self.input_features[key] = empty_camera
+ 
++        if self.relative_pose_rotation6d_enabled:
++            if self.robot_state_feature is None or self.robot_state_feature.shape != (INTERNAL_DIM,):
++                raise ValueError(
++                    f"Rotation6D relative pose requires a compact {INTERNAL_DIM}-D observation.state feature."
++                )
++            if self.action_feature is None or self.action_feature.shape != (INTERNAL_DIM,):
++                raise ValueError(
++                    f"Rotation6D relative pose requires a compact {INTERNAL_DIM}-D action feature."
++                )
++
++        if self.dense_vision_enabled:
++            image_feature = self.input_features.get(self.dense_vision_image_key)
++            if image_feature is None or image_feature.type is not FeatureType.VISUAL:
++                raise ValueError(
++                    f"dense vision image feature is missing: {self.dense_vision_image_key!r}"
++                )
++            if image_feature.shape != (3, 720, 1280):
++                raise ValueError(
++                    "JC dense vision requires the original RGB feature shape (3,720,1280); "
++                    f"got {image_feature.shape}"
++                )
++
+     def get_optimizer_preset(self) -> AdamWConfig:
+         return AdamWConfig(
+             lr=self.optimizer_lr,

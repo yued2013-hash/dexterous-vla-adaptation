@@ -1,0 +1,268 @@
+--- a/src/lerobot/scripts/lerobot_train.py
++++ b/src/lerobot/scripts/lerobot_train.py
+@@ -43,7 +43,10 @@
+     load_training_num_processes,
+     load_training_state,
+     push_checkpoint_to_hub,
++    resolve_process_rng_state_dir,
+     save_checkpoint,
++    save_process_rng_state,
++    should_restore_rng_before_dataloader,
+     update_last_checkpoint,
+ )
+ from lerobot.common.wandb_utils import WandBLogger
+@@ -59,7 +62,7 @@
+ from lerobot.utils.collate import lerobot_collate_fn
+ from lerobot.utils.import_utils import register_third_party_plugins
+ from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
+-from lerobot.utils.random_utils import set_seed
++from lerobot.utils.random_utils import load_rng_state, set_seed
+ from lerobot.utils.utils import (
+     cycle,
+     format_big_number,
+@@ -207,7 +210,7 @@
+     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
+     # We set find_unused_parameters=True to handle models with conditional computation
+     if accelerator is None:
+-        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
++        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False)
+         # Accelerate auto-detects the device based on the available hardware and ignores the policy.device setting.
+         # Force the device to be CPU when the active config's device is set to CPU (works for both policy and reward model training).
+         force_cpu = cfg.trainable_config.device == "cpu"
+@@ -381,6 +384,7 @@
+         )
+ 
+     step = 0  # number of policy updates (forward + backward + optim)
++    resume_rng_state_dir = None
+ 
+     if cfg.resume:
+         # Under FSDP the optimizer state is sharded and must be loaded after `accelerator.prepare()`
+@@ -389,6 +393,7 @@
+         step, optimizer, lr_scheduler = load_training_state(
+             cfg.checkpoint_path, optimizer, lr_scheduler, load_optimizer=not is_fsdp
+         )
++        resume_rng_state_dir = resolve_process_rng_state_dir(cfg.checkpoint_path, accelerator.process_index)
+ 
+     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+     num_total_params = sum(p.numel() for p in policy.parameters())
+@@ -411,6 +416,7 @@
+         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
+ 
+     # create dataloader for offline training
++    sampler_state = None
+     if not cfg.dataset.streaming:
+         # All non-streaming (map-style) datasets use EpisodeAwareSampler.
+         # The order is a pure function of (seed, epoch), so every rank independently produces the
+@@ -517,6 +523,34 @@
+     if cfg.resume and accelerator.distributed_type == DistributedType.FSDP:
+         load_fsdp_optimizer_state(policy, optimizer, cfg.checkpoint_path)
+ 
++    if sampler_state is not None:
++        # Accelerate's DataLoaderShard starts with ``iteration=0`` and calls
++        # ``set_epoch(self.iteration)`` when its iterator is first created. Without restoring the
++        # wrapper's iteration after ``prepare``, that call overwrites a resumed epoch while leaving
++        # the frame offset untouched, mixing the offset from epoch E with epoch 0's permutation.
++        if not hasattr(dataloader, "set_epoch"):
++            raise RuntimeError("Prepared dataloader cannot restore the sampler epoch")
++        dataloader.set_epoch(sampler_state["epoch"])
++        if is_main_process:
++            logging.info(f"Restored prepared dataloader epoch to {sampler_state['epoch']}")
++
++    persistent_worker_pool = cfg.persistent_workers and cfg.num_workers > 0
++    restore_rng_before_first_batch = (
++        resume_rng_state_dir is not None
++        and should_restore_rng_before_dataloader(sampler_state, persistent_workers=persistent_worker_pool)
++    )
++    if (
++        resume_rng_state_dir is not None
++        and sampler_state is not None
++        and sampler_state["start_index"] == 0
++        and persistent_worker_pool
++        and is_main_process
++    ):
++        logging.warning(
++            "Resuming at an epoch boundary with persistent_workers=True: model RNG will be restored, "
++            "but worker RNG streams cannot be reconstructed sample-exactly."
++        )
++
+     dl_iter = cycle(dataloader)
+ 
+     policy.train()
+@@ -539,6 +573,22 @@
+         # max() because headroom is gated by the worst-case rank.
+         train_metrics["gpu_mem_gb"] = AverageMeter("mem_gb", ":.2f", reduction="max")
+ 
++    policy_loss_metric_names: list[str] = []
++    action_loss_groups = getattr(cfg.policy, "action_loss_groups", None)
++    if action_loss_groups:
++        for group_name in action_loss_groups:
++            metric_name = f"loss_{group_name}"
++            train_metrics[metric_name] = AverageMeter(metric_name, ":.3f", reduction="mean")
++            policy_loss_metric_names.append(metric_name)
++        if getattr(cfg.policy, "quaternion_geodesic_weight", 0.0) > 0:
++            metric_name = "loss_quaternion_geodesic"
++            train_metrics[metric_name] = AverageMeter(metric_name, ":.4f", reduction="mean")
++            policy_loss_metric_names.append(metric_name)
++        if getattr(cfg.policy, "relative_xyz_anchor_weight", 0.0) > 0:
++            metric_name = "loss_relative_xyz_anchor"
++            train_metrics[metric_name] = AverageMeter(metric_name, ":.4f", reduction="mean")
++            policy_loss_metric_names.append(metric_name)
++
+     # Keep global batch size for logging; MetricsTracker handles world size internally.
+     effective_batch_size = cfg.batch_size * accelerator.num_processes
+     train_tracker = MetricsTracker(
+@@ -564,6 +614,20 @@
+         )
+ 
+     for _ in range(step, cfg.steps):
++        if resume_rng_state_dir is not None and restore_rng_before_first_batch:
++            # At an epoch boundary, the uninterrupted run creates the next DataLoader iterator
++            # after checkpointing. Restore immediately before ``next`` so iterator construction
++            # consumes the same worker-base-seed draw, without setup code shifting the RNG first.
++            load_rng_state(resume_rng_state_dir)
++            if is_main_process:
++                legacy_dir = cfg.checkpoint_path / "training_state"
++                state_kind = "legacy shared" if resume_rng_state_dir == legacy_dir else "per-process"
++                logging.info(
++                    f"Restored {state_kind} RNG state for rank {accelerator.process_index} before "
++                    f"creating epoch {sampler_state['epoch']} iterator from {resume_rng_state_dir}"
++                )
++            resume_rng_state_dir = None
++
+         start_time = time.perf_counter()
+         batch = next(dl_iter)
+         for cam_key in dataset.meta.camera_keys:
+@@ -571,6 +635,21 @@
+                 batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
+         batch = preprocessor(batch)
+         train_tracker.dataloading_s = time.perf_counter() - start_time
++
++        if resume_rng_state_dir is not None:
++            # Mid-epoch (or persistent-worker) resume creates an iterator the uninterrupted run did
++            # not create at this point. Erase its main-process RNG consumption immediately before
++            # the first stochastic forward. Worker RNG streams themselves are only reconstructible
++            # at a non-persistent epoch boundary (handled above).
++            load_rng_state(resume_rng_state_dir)
++            if is_main_process:
++                legacy_dir = cfg.checkpoint_path / "training_state"
++                state_kind = "legacy shared" if resume_rng_state_dir == legacy_dir else "per-process"
++                logging.info(
++                    f"Restored {state_kind} RNG state for rank {accelerator.process_index} "
++                    f"from {resume_rng_state_dir}"
++                )
++            resume_rng_state_dir = None
+ 
+         train_tracker, output_dict = update_policy(
+             train_tracker,
+@@ -582,6 +661,10 @@
+             lr_scheduler=lr_scheduler,
+             sample_weighter=sample_weighter,
+         )
++        if output_dict:
++            for metric_name in policy_loss_metric_names:
++                if metric_name in output_dict:
++                    setattr(train_tracker, metric_name, output_dict[metric_name])
+ 
+         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
+         # increment `step` here.
+@@ -617,26 +700,57 @@
+ 
+         if is_eval_step:
+             policy.eval()
+-            eval_loss_sum = 0.0
+-            n_eval_batches = 0
+-            with torch.no_grad(), accelerator.autocast():
+-                for eval_batch in eval_dataloader:
+-                    for cam_key in dataset.meta.camera_keys:
+-                        if cam_key in eval_batch and eval_batch[cam_key].dtype == torch.uint8:
+-                            eval_batch[cam_key] = eval_batch[cam_key].to(dtype=torch.float32) / 255.0
+-                    eval_batch = preprocessor(eval_batch)
+-                    loss, _ = policy.forward(eval_batch)
+-                    eval_loss_sum += loss.item()
+-                    n_eval_batches += 1
+-            eval_loss = eval_loss_sum / max(n_eval_batches, 1)
+-            eval_loss = torch.tensor(eval_loss, device=device)
+-            eval_loss = accelerator.reduce(eval_loss, reduction="mean").item()
++            eval_metric_names = ["loss", *policy_loss_metric_names]
++            eval_sums = dict.fromkeys(eval_metric_names, 0.0)
++            eval_counts = dict.fromkeys(eval_metric_names, 0)
++            # Flow-matching validation samples noise and time internally. Fork and
++            # restore the RNG state so every checkpoint sees an identical
++            # rank-specific validation draw without perturbing subsequent
++            # training randomness.
++            eval_seed = cfg.seed + 100_003 + accelerator.process_index * 1_000_003
++            fork_rng_devices = [device.index] if device.type == "cuda" and device.index is not None else []
++            with torch.random.fork_rng(devices=fork_rng_devices):
++                torch.manual_seed(eval_seed)
++                if device.type == "cuda":
++                    torch.cuda.manual_seed(eval_seed)
++                with torch.no_grad(), accelerator.autocast():
++                    for eval_batch in eval_dataloader:
++                        eval_batch_size = int(eval_batch["action"].shape[0])
++                        for cam_key in dataset.meta.camera_keys:
++                            if cam_key in eval_batch and eval_batch[cam_key].dtype == torch.uint8:
++                                eval_batch[cam_key] = eval_batch[cam_key].to(dtype=torch.float32) / 255.0
++                        eval_batch = preprocessor(eval_batch)
++                        loss, eval_output = policy.forward(eval_batch)
++                        eval_sums["loss"] += float(loss.detach().float().item()) * eval_batch_size
++                        eval_counts["loss"] += eval_batch_size
++                        if eval_output:
++                            for metric_name in policy_loss_metric_names:
++                                if metric_name in eval_output:
++                                    metric_value = eval_output[metric_name]
++                                    if isinstance(metric_value, torch.Tensor):
++                                        metric_value = metric_value.detach().float().mean().item()
++                                    eval_sums[metric_name] += float(metric_value) * eval_batch_size
++                                    eval_counts[metric_name] += eval_batch_size
++
++            packed_values = []
++            for metric_name in eval_metric_names:
++                packed_values.extend((eval_sums[metric_name], float(eval_counts[metric_name])))
++            packed = torch.tensor(packed_values, dtype=torch.float64, device=device)
++            packed = accelerator.reduce(packed, reduction="sum").cpu().tolist()
++            eval_metrics = {}
++            for metric_index, metric_name in enumerate(eval_metric_names):
++                metric_sum = packed[2 * metric_index]
++                metric_count = packed[2 * metric_index + 1]
++                if metric_count > 0:
++                    output_name = "eval_loss" if metric_name == "loss" else f"eval_{metric_name}"
++                    eval_metrics[output_name] = metric_sum / metric_count
+             policy.train()
+ 
+             if is_main_process:
+-                logging.info(f"step {step}: eval_loss={eval_loss:.4f}")
++                metrics_text = " ".join(f"{name}={value:.4f}" for name, value in eval_metrics.items())
++                logging.info(f"step {step}: {metrics_text}")
+                 if wandb_logger:
+-                    wandb_logger.log_dict({"eval_loss": eval_loss}, step=step, mode="eval")
++                    wandb_logger.log_dict(eval_metrics, step=step, mode="eval")
+ 
+         if cfg.save_checkpoint and is_saving_step:
+             # Under FSDP, gathering the full model + optimizer state dicts is a cross-rank collective,
+@@ -647,9 +761,9 @@
+                 model_state_dict, optim_state_dict = gather_fsdp_state_dicts(policy, optimizer)
+             else:
+                 model_state_dict, optim_state_dict = None, None
++            checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+             if is_main_process:
+                 logging.info(f"Checkpoint policy after step {step}")
+-                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+                 save_checkpoint(
+                     checkpoint_dir=checkpoint_dir,
+                     step=step,
+@@ -664,6 +778,15 @@
+                     model_state_dict=model_state_dict,
+                     optim_state_dict=optim_state_dict,
+                 )
++
++            # Rank 0's legacy RNG file is written by ``save_checkpoint`` above. Once the complete
++            # base checkpoint exists, every process writes its own state to a unique path. Publish
++            # the ``last`` link (and optional Hub upload) only after all rank files are durable.
++            accelerator.wait_for_everyone()
++            save_process_rng_state(checkpoint_dir, accelerator.process_index)
++            accelerator.wait_for_everyone()
++
++            if is_main_process:
+                 update_last_checkpoint(checkpoint_dir)
+                 if cfg.save_checkpoint_to_hub:
+                     push_checkpoint_to_hub(

@@ -1,0 +1,28 @@
+--- a/src/lerobot/datasets/factory.py
++++ b/src/lerobot/datasets/factory.py
+@@ -153,11 +153,21 @@
+         full_dataset.episodes if full_dataset.episodes is not None else list(range(full_dataset.num_episodes))
+     )
+ 
+-    episode_tasks = full_dataset.meta.episodes["tasks"]
+     task_to_episodes: dict[str, list[int]] = {}
+-    for ep_idx in base_episodes:
+-        task_key = episode_tasks[ep_idx][0] if episode_tasks[ep_idx] else ""
+-        task_to_episodes.setdefault(task_key, []).append(ep_idx)
++    if "tasks" in full_dataset.meta.episodes.column_names:
++        episode_tasks = full_dataset.meta.episodes["tasks"]
++        for ep_idx in base_episodes:
++            task_key = episode_tasks[ep_idx][0] if episode_tasks[ep_idx] else ""
++            task_to_episodes.setdefault(task_key, []).append(ep_idx)
++    else:
++        # Some valid local v3 datasets do not ship meta/episodes metadata. In
++        # that case there is no task label available for stratification, so
++        # preserve the caller-provided episode order and treat it as one task.
++        logging.warning(
++            "Dataset has no meta.episodes['tasks'] column; applying eval_split "
++            "over the configured episode order as a single task."
++        )
++        task_to_episodes[""] = list(base_episodes)
+ 
+     train_episodes, eval_episodes = [], []
+     for eps in task_to_episodes.values():

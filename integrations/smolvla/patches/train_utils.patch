@@ -1,0 +1,80 @@
+--- a/src/lerobot/common/train_utils.py
++++ b/src/lerobot/common/train_utils.py
+@@ -33,12 +33,26 @@
+     CHECKPOINTS_DIR,
+     LAST_CHECKPOINT_LINK,
+     PRETRAINED_MODEL_DIR,
++    RNG_STATE,
+     TRAINING_STATE_DIR,
+     TRAINING_STEP,
+ )
+ from lerobot.utils.hub import find_latest_hub_checkpoint
+ from lerobot.utils.io_utils import load_json, write_json
+ from lerobot.utils.random_utils import load_rng_state, save_rng_state
++
++_PROCESS_RNG_STATES_DIR = "rng_states"
++
++
++def should_restore_rng_before_dataloader(sampler_state: dict | None, *, persistent_workers: bool) -> bool:
++    """Whether resume RNG must be restored before constructing the next DataLoader iterator.
++
++    At an epoch boundary, an uninterrupted run creates a new iterator after the checkpoint and
++    legitimately consumes its worker-base-seed draw. Mid-epoch, recreating an iterator is a resume
++    artifact, so its RNG consumption must instead be erased by restoring immediately before the
++    first stochastic forward pass.
++    """
++    return sampler_state is not None and sampler_state["start_index"] == 0 and not persistent_workers
+ 
+ 
+ def get_step_identifier(step: int, total_steps: int) -> str:
+@@ -80,6 +94,42 @@
+ def load_training_batch_size(checkpoint_dir: Path) -> int | None:
+     """Per-process batch size recorded at checkpoint time, or None for older checkpoints."""
+     return load_json(checkpoint_dir / TRAINING_STATE_DIR / TRAINING_STEP).get("batch_size")
++
++
++def get_process_rng_state_dir(checkpoint_dir: Path, process_index: int) -> Path:
++    """Return the checkpoint directory reserved for one distributed process's RNG state."""
++    if process_index < 0:
++        raise ValueError(f"process_index must be non-negative, got {process_index}")
++    return checkpoint_dir / TRAINING_STATE_DIR / _PROCESS_RNG_STATES_DIR / f"rank_{process_index:05d}"
++
++
++def save_process_rng_state(checkpoint_dir: Path, process_index: int) -> Path:
++    """Save one process's Python, NumPy, CPU torch, and current-device CUDA RNG states.
++
++    Distributed callers must invoke this once on every process. Each process writes a unique file,
++    so no collective or rank-0 gathering is required.
++    """
++    rng_state_dir = get_process_rng_state_dir(checkpoint_dir, process_index)
++    rng_state_dir.mkdir(parents=True, exist_ok=True)
++    save_rng_state(rng_state_dir)
++    return rng_state_dir
++
++
++def resolve_process_rng_state_dir(checkpoint_dir: Path, process_index: int) -> Path:
++    """Select a process-specific RNG state, falling back to the legacy rank-0 state.
++
++    Older checkpoints contain only ``training_state/rng_state.safetensors``. Keeping this fallback
++    preserves their loadability, although exact DDP continuation requires a checkpoint written with
++    one RNG state per process.
++    """
++    process_dir = get_process_rng_state_dir(checkpoint_dir, process_index)
++    if (process_dir / RNG_STATE).is_file():
++        return process_dir
++
++    legacy_dir = checkpoint_dir / TRAINING_STATE_DIR
++    if not (legacy_dir / RNG_STATE).is_file():
++        raise FileNotFoundError(legacy_dir / RNG_STATE)
++    return legacy_dir
+ 
+ 
+ def update_last_checkpoint(checkpoint_dir: Path) -> Path:
+@@ -117,6 +167,7 @@
+         ├── optimizer_param_groups.json  #  optimizer param groups
+         ├── optimizer_state.safetensors  # optimizer state
+         ├── rng_state.safetensors  # rng states
++        ├── rng_states/rank_*/rng_state.safetensors  # per-process RNG states (distributed)
+         ├── scheduler_state.json  # scheduler state
+         └── training_step.json  # training step
+ 

@@ -1,0 +1,44 @@
+[
+  {
+    "path": "src/lerobot/common/train_utils.py",
+    "status": "modified",
+    "source_sha256": "632800f6eab45d297c6d95b03e10f5acee17c4a1e0f892534bfd91ee360d0c3e",
+    "base_sha256": "2c16a61fb486253ebce7684786c73f141a6d2d57c8bcdab681ad26d2c9716698"
+  },
+  {
+    "path": "src/lerobot/datasets/factory.py",
+    "status": "modified",
+    "source_sha256": "6418a5252a8413c7ee3783078d2f8b1bebc5693b0ad481ed51100330c9a03ce2",
+    "base_sha256": "8af7945ce4802e1aede4dda316f32cb57bc634482f12ee0eface4721cd748e05"
+  },
+  {
+    "path": "src/lerobot/scripts/lerobot_train.py",
+    "status": "modified",
+    "source_sha256": "f343a85e7c2744fcf383922b113dde6555a967b2fc581870bb2a4691e84a2030",
+    "base_sha256": "95f6d05d21205c03abbfbf4225ed1cb26b7af4826e3e8a84def3eb10ddd988dc"
+  },
+  {
+    "path": "src/lerobot/policies/smolvla/configuration_smolvla.py",
+    "status": "modified",
+    "source_sha256": "e728aa66451ffa847c2dab23b30b3c2f91629a77f953f15882c6a12c16d91dbe",
+    "base_sha256": "2fb637cb428fa2fdf1d114646dcffaf4728216bfe5b7039d5d0cac4857ffc4e0"
+  },
+  {
+    "path": "src/lerobot/policies/smolvla/dense_vision.py",
+    "status": "added",
+    "source_sha256": "f6f947c0764e8bd48339b8b013ac1d97883d9cc94c4ac5967fc6432ed94285fd",
+    "base_sha256": null
+  },
+  {
+    "path": "src/lerobot/policies/smolvla/modeling_smolvla.py",
+    "status": "modified",
+    "source_sha256": "0ad2ca1d4b03e3a51b1f7b80f67cfed5c108731836cded24196566aa64b924e4",
+    "base_sha256": "5daaa297954acf9ae89397b571322f07bf30798e72f566e61a09393342cb1f99"
+  },
+  {
+    "path": "src/lerobot/policies/smolvla/relative_pose.py",
+    "status": "added",
+    "source_sha256": "83b0f0d281533b5cc66d9b7339c7f968a2c339353b8bdc71626442c0293b9e0f",
+    "base_sha256": null
+  }
+]

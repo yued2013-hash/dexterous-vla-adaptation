@@ -1,0 +1,60 @@
+{
+  "project": "Dexterous VLA Adaptation",
+  "source_families": [
+    "LeRobot/SmolVLA",
+    "DexGraspVLA"
+  ],
+  "dataset": {
+    "episodes": 66,
+    "frames": 23283,
+    "fps": 10,
+    "training_validation_test_split": "all selected66 used for this branch; no held-out validation/test split"
+  },
+  "contracts": {
+    "policy_control_dim": 25,
+    "position_force_dim": 30,
+    "quaternion_boundary_dim": 23,
+    "chunk_size": 16,
+    "execution_steps": 6,
+    "pose_convention": "world-fixed anchor; relative translation and R_target @ R_anchor.T; hand absolute"
+  },
+  "dense_vision": {
+    "backbone": "DINOv2 ViT-B/14",
+    "patch_grid": [
+      37,
+      37
+    ],
+    "tokens": 1369,
+    "projection": [
+      768,
+      720
+    ],
+    "attention_heads": 8,
+    "denoising_steps": 10,
+    "stage1_trainable_parameters_reported": 3155760,
+    "stage2_trainable_parameters_reported": 103019945
+  },
+  "historical_checks": {
+    "unit_tests_reported": 32,
+    "zero_gate_action_shape": [
+      1,
+      16,
+      25
+    ],
+    "zero_gate_max_abs_reported": 0.0,
+    "stage1_checkpoint_steps_reported": 18200,
+    "dense_stage2_completion": "not established by supplied artifacts",
+    "force_400epoch_completion": "configuration present; completion not established"
+  },
+  "performance": {
+    "hardware_success_rate": null,
+    "baseline_improvement": null,
+    "held_out_metrics": null
+  },
+  "video": {
+    "model_variant": null,
+    "checkpoint": null,
+    "status": "user-provided real-robot demonstration; model attribution and trial counts not recorded"
+  },
+  "status": "Implementation and historical audit evidence; no controlled task-performance claim"
+}

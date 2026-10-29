@@ -1,0 +1,8 @@
+* text=auto
+*.py text eol=lf
+*.mp4 binary
+*.png binary
+*.jpg binary
+*.patch text eol=lf -whitespace
+*.patch -whitespace
+*.patch -whitespace

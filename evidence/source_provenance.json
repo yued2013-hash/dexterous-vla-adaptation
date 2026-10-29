@@ -1,0 +1,134 @@
+{
+  "snapshot_date": "2026-08-10",
+  "smolvla_base_source_marker": "07285677a3ef2f287a05c271f4b668f20e2ce57f",
+  "dense_audit_base_commit": "736299d607882176391b97be24edd616d53864cb",
+  "dexgraspvla_local_base_commit": "4be75b80b92119b8d5b0e59d67ae5f5e5e5f8a53",
+  "note": "Source markers belong to supplied snapshots/local worktrees; they are not asserted to be public upstream commits. Existing interface work is inherited project context, not all new from this repository.",
+  "sources": [
+    {
+      "package": [
+        "smolvla_code_20260810",
+        "lerobot-smolvla-dino-dense-jc-parity-v1",
+        "experiment_configs",
+        "nero_rot6d_relative_pose",
+        "dense_dino_jc_parity_v1_audit.json"
+      ],
+      "source_sha256": "9c571d3c436cbd999996e95925263bb09fb962e37f660682f9de07420779f2a3",
+      "published": "evidence/dense_dino_audit.json",
+      "transformation": "absolute runtime paths replaced with placeholders; numeric values unchanged"
+    },
+    {
+      "package": [
+        "smolvla_code_20260810",
+        "lerobot-smolvla-dino-dense-jc-parity-v1",
+        "experiment_configs",
+        "nero_rot6d_relative_pose",
+        "train_selected66_8gpu_300ep_jc_parity_audit.json"
+      ],
+      "source_sha256": "7b62384dc22376bcbd9ac902bf1eb769faba3a2e83e40449f3561c943e103e11",
+      "published": "evidence/smolvla_training_audit.json",
+      "transformation": "absolute runtime paths replaced with placeholders; numeric values unchanged"
+    },
+    {
+      "package": [
+        "dexgraspvla_code_20260810",
+        "DexGraspVLA_jc_selected66_position_force_20260805",
+        "dataset_audit_jc_vs_zyc.json"
+      ],
+      "source_sha256": "f8f32d37fd1d3359bf122c7d15688aa02605cf38f8de2d5e903f3c8b397b5464",
+      "published": "evidence/dataset_alignment_audit.json",
+      "transformation": "absolute runtime paths replaced with placeholders; numeric values unchanged"
+    },
+    {
+      "package": [
+        "dexgraspvla_code_20260810",
+        "DexGraspVLA_jc_selected66_position_force_20260805",
+        "dataset_audit_selected66_raw_provenance.json"
+      ],
+      "source_sha256": "7bfb557dcd50387e84536c2e4ef75fc0b210e07a964bfb034cb266500075f8ff",
+      "published": "evidence/selected66_provenance_audit.json",
+      "transformation": "absolute runtime paths replaced with placeholders; numeric values unchanged"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/common/train_utils.py",
+      "source_sha256": "632800f6eab45d297c6d95b03e10f5acee17c4a1e0f892534bfd91ee360d0c3e",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/datasets/factory.py",
+      "source_sha256": "6418a5252a8413c7ee3783078d2f8b1bebc5693b0ad481ed51100330c9a03ce2",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/scripts/lerobot_train.py",
+      "source_sha256": "f343a85e7c2744fcf383922b113dde6555a967b2fc581870bb2a4691e84a2030",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/policies/smolvla/configuration_smolvla.py",
+      "source_sha256": "e728aa66451ffa847c2dab23b30b3c2f91629a77f953f15882c6a12c16d91dbe",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/policies/smolvla/dense_vision.py",
+      "source_sha256": "f6f947c0764e8bd48339b8b013ac1d97883d9cc94c4ac5967fc6432ed94285fd",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/policies/smolvla/modeling_smolvla.py",
+      "source_sha256": "0ad2ca1d4b03e3a51b1f7b80f67cfed5c108731836cded24196566aa64b924e4",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "smolvla_code_20260810",
+      "variant": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "src/lerobot/policies/smolvla/relative_pose.py",
+      "source_sha256": "83b0f0d281533b5cc66d9b7339c7f968a2c339353b8bdc71626442c0293b9e0f",
+      "role": "Apache-2.0 module or diff against supplied baseline snapshot"
+    },
+    {
+      "package": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "experiment_configs\\nero_rot6d_relative_pose\\train_selected66_8gpu_300ep_jc_parity.json",
+      "source_sha256": "f1f16db59c94826b1d2e92923880cbcb58e2141d689722fdf73ce8d884c5099b",
+      "role": "configuration, with paths replaced; not a completion metric"
+    },
+    {
+      "package": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "experiment_configs\\nero_rot6d_relative_pose\\train_selected66_8gpu_dense_dino_stage1_50ep.json",
+      "source_sha256": "c954786b86cde3c9bad50b2eed278885935d98719b7af5d30329262895704685",
+      "role": "configuration, with paths replaced; not a completion metric"
+    },
+    {
+      "package": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "experiment_configs\\nero_rot6d_relative_pose\\train_selected66_8gpu_dense_dino_stage2_100ep.json",
+      "source_sha256": "695f1b06c30fde9a9774969c6ba6f78e06fd400baf72c3327b9ee5e6fb0a8f45",
+      "role": "configuration, with paths replaced; not a completion metric"
+    },
+    {
+      "package": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "tests/policies/smolvla/test_dense_vision.py",
+      "source_sha256": "75ad56a441571b602122a6d4709d24db9c77e09c0df77baeaa8fa0e2257215e3",
+      "role": "historical PyTorch model test source; NOT run by root reference suite"
+    },
+    {
+      "package": "lerobot-smolvla-dino-dense-jc-parity-v1",
+      "relative_path": "tests/policies/smolvla/test_relative_pose.py",
+      "source_sha256": "1a462c42edf771f49e06a7365fde0406a2ade1b8c98d9b2c101c03d7d43b97fb",
+      "role": "historical PyTorch model test source; NOT run by root reference suite",
+      "publication_change": "Private default data path replaced with an unavailable placeholder; configure through existing environment variable.",
+      "published_sha256": "f7971b3e1151529704c476c6b25c3efb2453b08344cc0354aee8eee61ac616dd"
+    }
+  ]
+}

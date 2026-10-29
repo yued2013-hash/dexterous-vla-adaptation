@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "scope": "Five supplied-snapshot diffs reconstruct normalized target source; no PyTorch execution",
+  "patches": [
+    {
+      "patch": "configuration_smolvla.patch",
+      "normalized_source_reconstruction_equal": true
+    },
+    {
+      "patch": "factory.patch",
+      "normalized_source_reconstruction_equal": true
+    },
+    {
+      "patch": "lerobot_train.patch",
+      "normalized_source_reconstruction_equal": true
+    },
+    {
+      "patch": "modeling_smolvla.patch",
+      "normalized_source_reconstruction_equal": true
+    },
+    {
+      "patch": "train_utils.patch",
+      "normalized_source_reconstruction_equal": true
+    }
+  ]
+}

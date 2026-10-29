@@ -1,0 +1,28 @@
+{
+  "status": "PASS",
+  "dataset": "${LOCAL_ARTIFACTS}/nero_20260803_selected66_10hz",
+  "raw_root": "${LOCAL_ARTIFACTS}/2026-08-03_selected66",
+  "episodes": 66,
+  "frames": 23283,
+  "observation_state_source": [
+    "observation_ee_pose",
+    "observation_hand_state"
+  ],
+  "action_source": [
+    "action_ee_pose",
+    "action_hand_command"
+  ],
+  "max_processed_state_vs_raw_difference": 3.5762786865234375e-07,
+  "max_processed_action_vs_raw_difference": 3.5762786865234375e-07,
+  "exact_equal_raw_state_action_row_fraction": 0.0,
+  "rgb_repeated_frame_count": 41,
+  "rgb_nearest_alignment_error_max_ms": 157.392896,
+  "rgb_nearest_alignment_error_ms": {
+    "median": 7.412992,
+    "p95": 16.1650944,
+    "p99": 36.30351872000003,
+    "max": 157.392896,
+    "frames_over_50ms": 136,
+    "frames_over_100ms": 20
+  }
+}

@@ -1,0 +1,789 @@
+--- a/src/lerobot/policies/smolvla/modeling_smolvla.py
++++ b/src/lerobot/policies/smolvla/modeling_smolvla.py
+@@ -70,6 +70,18 @@
+     populate_queues,
+ )
+ from .configuration_smolvla import SmolVLAConfig
++from .dense_vision import DenseDinoVisionEncoder, GatedDenseCrossAttention
++from .relative_pose import (
++    COMPACT_QUATERNION_IO,
++    INTERNAL_DIM,
++    JC_CANONICAL_ROTATION6D_IO,
++    absolute_internal_to_compact,
++    compact_quaternion_wxyz,
++    compact_to_absolute_internal,
++    compute_world_pose_delta,
++    reconstruct_absolute_action,
++    validate_canonical_internal,
++)
+ from .smolvlm_with_expert import SmolVLMWithExpertModel
+ 
+ 
+@@ -77,6 +89,27 @@
+     inference_delay: int | None
+     prev_chunk_left_over: Tensor | None
+     execution_horizon: int | None
++
++
++def _ddp_global_mean_from_local_sum(local_sum: Tensor, local_count: Tensor) -> Tensor:
++    """Return a loss whose DDP-averaged gradient is the exact global mean.
++
++    DDP averages gradients uniformly across ranks. When padding makes valid
++    element counts differ, averaging rank-local means is biased. We therefore
++    all-reduce only the detached denominator and scale each rank's differentiable
++    numerator by ``world_size / global_count``. After DDP's gradient average,
++    the result is exactly ``sum(local_numerator) / sum(local_count)``.
++    """
++    if local_sum.ndim != 0 or local_count.ndim != 0:
++        raise ValueError("Distributed mean expects scalar numerator and count tensors.")
++
++    world_size = 1
++    global_count = local_count.detach().to(dtype=torch.float64).clone()
++    if torch.distributed.is_available() and torch.distributed.is_initialized():
++        torch.distributed.all_reduce(global_count, op=torch.distributed.ReduceOp.SUM)
++        world_size = torch.distributed.get_world_size()
++    denominator = global_count.clamp_min(1).to(dtype=local_sum.dtype)
++    return local_sum * world_size / denominator
+ 
+ 
+ def create_sinusoidal_pos_embedding(
+@@ -273,6 +306,240 @@
+     def get_optim_params(self) -> dict:
+         return self.parameters()
+ 
++    def _relative_pose_stat(self, name: str, reference: Tensor) -> Tensor:
++        values = getattr(self.config, name)
++        if values is None:
++            raise RuntimeError(f"Relative-pose statistic {name!r} is missing from the policy config.")
++        return torch.as_tensor(values, dtype=reference.dtype, device=reference.device)
++
++    def _relative_pose_normalization_mode(self) -> str:
++        # getattr keeps old checkpoints and lightweight unit-test configs
++        # compatible with the pre-parity mean/std behavior.
++        return getattr(self.config, "relative_pose_normalization_mode", "mean_std")
++
++    def _relative_pose_affine(self, kind: str, reference: Tensor) -> tuple[Tensor, Tensor]:
++        mode = self._relative_pose_normalization_mode()
++        if mode == "mean_std":
++            mean = self._relative_pose_stat(f"relative_pose_{kind}_mean", reference)
++            std = self._relative_pose_stat(f"relative_pose_{kind}_std", reference)
++            return std.reciprocal(), -mean / std
++        if mode != "limits":
++            raise RuntimeError(f"Unsupported relative-pose normalization mode: {mode!r}.")
++
++        minimum = self._relative_pose_stat(f"relative_pose_{kind}_min", reference)
++        maximum = self._relative_pose_stat(f"relative_pose_{kind}_max", reference)
++        input_range = maximum - minimum
++        range_eps = getattr(self.config, "relative_pose_normalization_range_eps", 1e-4)
++        constant = input_range < range_eps
++        safe_range = torch.where(constant, torch.full_like(input_range, 2.0), input_range)
++        scale = 2.0 / safe_range
++        offset = -1.0 - scale * minimum
++        # Exact JC LinearNormalizer behavior: constant dimensions use unit
++        # scale and map the observed constant to the midpoint (zero).
++        offset = torch.where(constant, -minimum, offset)
++        return scale, offset
++
++    def _normalize_relative_pose(self, values: Tensor, kind: str) -> Tensor:
++        scale, offset = self._relative_pose_affine(kind, values)
++        return values * scale + offset
++
++    def _unnormalize_relative_pose(self, values: Tensor, kind: str) -> Tensor:
++        scale, offset = self._relative_pose_affine(kind, values)
++        return (values - offset) / scale
++
++    def _validate_training_compact_values(self) -> bool:
++        return bool(getattr(self.config, "relative_pose_validate_training_values", False))
++
++    def _quaternion_norm_tolerance(self) -> float | None:
++        return getattr(self.config, "relative_pose_quaternion_norm_tolerance", None)
++
++    def _current_external_state(self, batch: dict[str, Tensor]) -> Tensor:
++        state = batch[OBS_STATE][:, -1, :] if batch[OBS_STATE].ndim > 2 else batch[OBS_STATE]
++        if state.shape[-1] != INTERNAL_DIM:
++            raise ValueError(
++                f"Rotation6D relative pose expects an external {INTERNAL_DIM}-D state, "
++                f"got shape {tuple(state.shape)}."
++            )
++        return state
++
++    def _encode_relative_pose_state(self, external_state: Tensor) -> Tensor:
++        state_names = self.config.relative_pose_state_feature_names
++        if state_names is None:
++            raise RuntimeError("Relative-pose state feature names are missing from the policy config.")
++        with torch.autocast(device_type=external_state.device.type, enabled=False):
++            absolute_state = compact_to_absolute_internal(
++                external_state.float(),
++                state_names,
++                validate_values=not self.training or self._validate_training_compact_values(),
++                validity_threshold=self.config.relative_pose_validity_threshold,
++                eps=self.config.relative_pose_eps,
++                quaternion_norm_tolerance=self._quaternion_norm_tolerance(),
++            )
++            return self._normalize_relative_pose(absolute_state, "state")
++
++    def _encode_relative_pose_actions(self, external_actions: Tensor, external_state: Tensor) -> Tensor:
++        state_names = self.config.relative_pose_state_feature_names
++        action_names = self.config.relative_pose_action_feature_names
++        if state_names is None or action_names is None:
++            raise RuntimeError("Relative-pose state/action feature names are missing from the policy config.")
++        if external_actions.shape[-1] != INTERNAL_DIM:
++            raise ValueError(
++                f"Rotation6D relative pose expects external {INTERNAL_DIM}-D actions, "
++                f"got shape {tuple(external_actions.shape)}."
++            )
++        with torch.autocast(device_type=external_actions.device.type, enabled=False):
++            validate_values = not self.training or self._validate_training_compact_values()
++            anchor = compact_to_absolute_internal(
++                external_state.float(),
++                state_names,
++                validate_values=validate_values,
++                validity_threshold=self.config.relative_pose_validity_threshold,
++                eps=self.config.relative_pose_eps,
++                quaternion_norm_tolerance=self._quaternion_norm_tolerance(),
++            )
++            targets = compact_to_absolute_internal(
++                external_actions.float(),
++                action_names,
++                validate_values=validate_values,
++                validity_threshold=self.config.relative_pose_validity_threshold,
++                eps=self.config.relative_pose_eps,
++                quaternion_norm_tolerance=self._quaternion_norm_tolerance(),
++            )
++            relative_actions = compute_world_pose_delta(anchor, targets)
++            return self._normalize_relative_pose(relative_actions, "action")
++
++    def _decode_relative_pose_actions(self, normalized_actions: Tensor, external_state: Tensor) -> Tensor:
++        state_names = self.config.relative_pose_state_feature_names
++        action_names = self.config.relative_pose_action_feature_names
++        if state_names is None or action_names is None:
++            raise RuntimeError("Relative-pose state/action feature names are missing from the policy config.")
++        if not bool(torch.isfinite(normalized_actions).all()):
++            raise RuntimeError("SmolVLA produced a non-finite normalized relative-pose action.")
++
++        with torch.autocast(device_type=normalized_actions.device.type, enabled=False):
++            normalized_actions = normalized_actions.float()
++            external_state = external_state.float()
++            relative_actions = self._unnormalize_relative_pose(normalized_actions, "action")
++            anchor = compact_to_absolute_internal(
++                external_state,
++                state_names,
++                validate_values=True,
++                validity_threshold=self.config.relative_pose_validity_threshold,
++                eps=self.config.relative_pose_eps,
++                quaternion_norm_tolerance=self._quaternion_norm_tolerance(),
++            )
++            absolute_actions = reconstruct_absolute_action(anchor, relative_actions)
++            reference_quaternion = compact_quaternion_wxyz(external_state, state_names)
++            compact_actions = absolute_internal_to_compact(
++                absolute_actions,
++                action_names,
++                reference_quaternion_wxyz=reference_quaternion,
++                eps=self.config.relative_pose_eps,
++            )
++            if not bool(torch.isfinite(compact_actions).all()):
++                raise RuntimeError("Relative-pose decoding produced a non-finite external action.")
++            return compact_actions
++
++    def _encode_jc_canonical_state(self, canonical_state: Tensor) -> Tensor:
++        """Normalize JC's online ``xyz3+rotation6D6+hand16`` state boundary."""
++        with torch.autocast(device_type=canonical_state.device.type, enabled=False):
++            canonical_state = canonical_state.float()
++            validate_canonical_internal(
++                canonical_state,
++                eps=self.config.relative_pose_eps,
++                label="JC canonical policy state",
++            )
++            return self._normalize_relative_pose(canonical_state, "state")
++
++    def _decode_jc_canonical_actions(
++        self,
++        normalized_actions: Tensor,
++        canonical_state: Tensor,
++    ) -> Tensor:
++        """Return the same absolute canonical rotation6D action boundary as JC."""
++        if not bool(torch.isfinite(normalized_actions).all()):
++            raise RuntimeError("SmolVLA produced a non-finite normalized relative-pose action.")
++
++        with torch.autocast(device_type=normalized_actions.device.type, enabled=False):
++            normalized_actions = normalized_actions.float()
++            canonical_state = canonical_state.float()
++            validate_canonical_internal(
++                canonical_state,
++                eps=self.config.relative_pose_eps,
++                label="JC canonical policy state",
++            )
++            relative_actions = self._unnormalize_relative_pose(normalized_actions, "action")
++            absolute_actions = reconstruct_absolute_action(canonical_state, relative_actions)
++            validate_canonical_internal(
++                absolute_actions,
++                eps=self.config.relative_pose_eps,
++                label="JC canonical policy action",
++            )
++            return absolute_actions
++
++    def _relative_pose_inference_io_mode(self) -> str:
++        return getattr(self.config, "relative_pose_inference_io_mode", COMPACT_QUATERNION_IO)
++
++    def _relative_xyz_stat(self, name: str, reference: Tensor) -> Tensor:
++        values = getattr(self.config, name)
++        if values is None:
++            raise RuntimeError(f"Relative XYZ statistic {name!r} is missing from the policy config.")
++        return torch.as_tensor(values, dtype=reference.dtype, device=reference.device)
++
++    def _encode_relative_xyz(self, actions: Tensor, state: Tensor) -> Tensor:
++        """Convert normalized absolute XYZ actions to normalized current-relative XYZ."""
++        action_indices = torch.as_tensor(
++            self.config.relative_xyz_action_indices, dtype=torch.long, device=actions.device
++        )
++        state_indices = torch.as_tensor(
++            self.config.relative_xyz_state_indices, dtype=torch.long, device=state.device
++        )
++        normalized_action_xyz = torch.index_select(actions, dim=-1, index=action_indices)
++        normalized_state_xyz = torch.index_select(state, dim=-1, index=state_indices)
++
++        action_mean = self._relative_xyz_stat("relative_xyz_action_mean", actions)
++        action_std = self._relative_xyz_stat("relative_xyz_action_std", actions)
++        state_mean = self._relative_xyz_stat("relative_xyz_state_mean", state)
++        state_std = self._relative_xyz_stat("relative_xyz_state_std", state)
++        delta_mean = self._relative_xyz_stat("relative_xyz_delta_mean", actions)
++        delta_std = self._relative_xyz_stat("relative_xyz_delta_std", actions)
++
++        absolute_action_xyz = normalized_action_xyz * action_std + action_mean
++        absolute_state_xyz = normalized_state_xyz * state_std + state_mean
++        relative_xyz = absolute_action_xyz - absolute_state_xyz.unsqueeze(1)
++        normalized_relative_xyz = (relative_xyz - delta_mean) / delta_std
++
++        encoded = actions.clone()
++        encoded[..., action_indices] = normalized_relative_xyz
++        return encoded
++
++    def _decode_relative_xyz(self, actions: Tensor, state: Tensor) -> Tensor:
++        """Convert normalized current-relative XYZ outputs to normalized absolute XYZ actions."""
++        action_indices = torch.as_tensor(
++            self.config.relative_xyz_action_indices, dtype=torch.long, device=actions.device
++        )
++        state_indices = torch.as_tensor(
++            self.config.relative_xyz_state_indices, dtype=torch.long, device=state.device
++        )
++        normalized_relative_xyz = torch.index_select(actions, dim=-1, index=action_indices)
++        normalized_state_xyz = torch.index_select(state, dim=-1, index=state_indices)
++
++        action_mean = self._relative_xyz_stat("relative_xyz_action_mean", actions)
++        action_std = self._relative_xyz_stat("relative_xyz_action_std", actions)
++        state_mean = self._relative_xyz_stat("relative_xyz_state_mean", state)
++        state_std = self._relative_xyz_stat("relative_xyz_state_std", state)
++        delta_mean = self._relative_xyz_stat("relative_xyz_delta_mean", actions)
++        delta_std = self._relative_xyz_stat("relative_xyz_delta_std", actions)
++
++        relative_xyz = normalized_relative_xyz * delta_std + delta_mean
++        absolute_state_xyz = normalized_state_xyz * state_std + state_mean
++        absolute_action_xyz = relative_xyz + absolute_state_xyz.unsqueeze(1)
++        normalized_action_xyz = (absolute_action_xyz - action_mean) / action_std
++
++        decoded = actions.clone()
++        decoded[..., action_indices] = normalized_action_xyz
++        return decoded
++
+     def _get_action_chunk(
+         self, batch: dict[str, Tensor], noise: Tensor | None = None, **kwargs: Unpack[ActionSelectKwargs]
+     ) -> Tensor:
+@@ -285,18 +552,48 @@
+             if k in self._queues and k != ACTION:
+                 batch[k] = torch.stack(list(self._queues[k]), dim=1)
+ 
++        dense_image = self.prepare_dense_image(batch)
+         images, img_masks = self.prepare_images(batch)
+-        state = self.prepare_state(batch)
++        external_state = None
++        if self.config.relative_pose_rotation6d_enabled:
++            external_state = self._current_external_state(batch)
++            io_mode = self._relative_pose_inference_io_mode()
++            if io_mode == JC_CANONICAL_ROTATION6D_IO:
++                encoded_state = self._encode_jc_canonical_state(external_state)
++            elif io_mode == COMPACT_QUATERNION_IO:
++                encoded_state = self._encode_relative_pose_state(external_state)
++            else:
++                raise RuntimeError(f"Unsupported relative-pose inference I/O mode: {io_mode!r}.")
++            state = pad_vector(encoded_state, self.config.max_state_dim)
++        else:
++            state = self.prepare_state(batch)
+         lang_tokens = batch[f"{OBS_LANGUAGE_TOKENS}"]
+         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
+ 
+         actions = self.model.sample_actions(
+-            images, img_masks, lang_tokens, lang_masks, state, noise=noise, **kwargs
++            images,
++            img_masks,
++            lang_tokens,
++            lang_masks,
++            state,
++            noise=noise,
++            dense_image=dense_image,
++            **kwargs,
+         )
+ 
+         # Unpad actions
+         original_action_dim = self.config.action_feature.shape[0]
+         actions = actions[:, :, :original_action_dim]
++
++        if self.config.relative_pose_rotation6d_enabled:
++            if external_state is None:
++                raise RuntimeError("Relative-pose inference anchor is missing.")
++            if io_mode == JC_CANONICAL_ROTATION6D_IO:
++                actions = self._decode_jc_canonical_actions(actions, external_state)
++            else:
++                actions = self._decode_relative_pose_actions(actions, external_state)
++        elif self.config.relative_xyz_enabled:
++            actions = self._decode_relative_xyz(actions, state)
+ 
+         if self.config.adapt_to_pi_aloha:
+             actions = self._pi_aloha_encode_actions(actions)
+@@ -372,17 +669,237 @@
+             batch[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
+             batch[ACTION] = self._pi_aloha_encode_actions_inv(batch[ACTION])
+ 
++        dense_image = self.prepare_dense_image(batch)
+         images, img_masks = self.prepare_images(batch)
+-        state = self.prepare_state(batch)
++        external_state = None
++        if self.config.relative_pose_rotation6d_enabled:
++            external_state = self._current_external_state(batch)
++            state = pad_vector(self._encode_relative_pose_state(external_state), self.config.max_state_dim)
++        else:
++            state = self.prepare_state(batch)
+         lang_tokens = batch[f"{OBS_LANGUAGE_TOKENS}"]
+         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
+-        actions = self.prepare_action(batch)
++        if self.config.relative_pose_rotation6d_enabled:
++            if external_state is None:
++                raise RuntimeError("Relative-pose training anchor is missing.")
++            actions = pad_vector(
++                self._encode_relative_pose_actions(batch[ACTION], external_state),
++                self.config.max_action_dim,
++            )
++        else:
++            actions = self.prepare_action(batch)
++        if self.config.relative_xyz_enabled:
++            actions = self._encode_relative_xyz(actions, state)
+         actions_is_pad = batch.get("action_is_pad")
++        if not getattr(self.config, "mask_padded_actions", True):
++            # JC repeats the last in-episode action at the episode tail and
++            # includes every repeated horizon in its plain full-tensor MSE.
++            actions_is_pad = None
+         loss_dict = {}
+-        losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
++        need_flow_outputs = (
++            self.config.quaternion_geodesic_weight > 0 or self.config.relative_xyz_anchor_weight > 0
++        )
++        model_output = self.model.forward(
++            images,
++            img_masks,
++            lang_tokens,
++            lang_masks,
++            state,
++            actions,
++            noise,
++            time,
++            return_flow_outputs=need_flow_outputs,
++            dense_image=dense_image,
++        )
++        if need_flow_outputs:
++            losses, flow_outputs = model_output
++        else:
++            losses = model_output
++            flow_outputs = None
++        reconstructed_actions = None
++        if flow_outputs is not None:
++            reconstructed_actions = flow_outputs["x_t"] - (
++                flow_outputs["time"][:, None, None] * flow_outputs["v_t"]
++            )
+         original_action_dim = self.config.action_feature.shape[0]
+         losses = losses[:, :, :original_action_dim]
+         loss_dict["losses_after_forward"] = losses.clone().mean().item()
++
++        if self.config.action_loss_groups is not None:
++            target_actions = actions[:, :, :original_action_dim]
++            group_masks: dict[str, Tensor] = {}
++            group_losses: dict[str, Tensor] = {}
++            group_per_sample_losses: dict[str, Tensor] = {}
++            group_available_per_sample: dict[str, Tensor] = {}
++
++            base_valid = torch.ones(losses.shape[:2], dtype=torch.bool, device=losses.device)
++            if actions_is_pad is not None:
++                base_valid = base_valid & ~actions_is_pad
++
++            for group_name, group_indices in self.config.action_loss_groups.items():
++                index_tensor = torch.as_tensor(group_indices, dtype=torch.long, device=losses.device)
++                valid = base_valid
++                if (
++                    self.config.action_loss_validity_indices is not None
++                    and group_name in self.config.action_loss_validity_indices
++                ):
++                    validity_index = self.config.action_loss_validity_indices[group_name]
++                    valid = valid & (
++                        target_actions[..., validity_index] >= self.config.action_loss_validity_threshold
++                    )
++                if (
++                    self.config.relative_xyz_enabled
++                    and group_name == self.config.relative_xyz_group
++                    and self.config.relative_xyz_state_validity_index is not None
++                ):
++                    state_valid = (
++                        state[..., self.config.relative_xyz_state_validity_index]
++                        >= self.config.action_loss_validity_threshold
++                    )
++                    valid = valid & state_valid.unsqueeze(1)
++
++                group_values = torch.index_select(losses, dim=-1, index=index_tensor)
++                valid_values = valid.unsqueeze(-1).expand_as(group_values)
++                value_weights = valid_values.to(dtype=group_values.dtype)
++                if (
++                    self.config.action_loss_horizon_weights is not None
++                    and group_name in self.config.action_loss_horizon_weights
++                ):
++                    horizon_weights = torch.as_tensor(
++                        self.config.action_loss_horizon_weights[group_name],
++                        dtype=group_values.dtype,
++                        device=group_values.device,
++                    )
++                    value_weights = value_weights * horizon_weights[None, :, None]
++                valid_count = value_weights.sum()
++                group_numerator = (group_values * value_weights).sum()
++                group_loss = _ddp_global_mean_from_local_sum(group_numerator, valid_count)
++
++                per_sample_count = value_weights.sum(dim=(1, 2))
++                per_sample_loss = (group_values * value_weights).sum(dim=(1, 2)) / per_sample_count.clamp_min(
++                    1
++                )
++
++                group_masks[group_name] = valid
++                group_losses[group_name] = group_loss
++                group_per_sample_losses[group_name] = per_sample_loss
++                group_available_per_sample[group_name] = per_sample_count > 0
++                loss_dict[f"loss_{group_name}"] = group_loss.detach().item()
++
++            weights = {
++                group_name: (
++                    self.config.action_loss_group_weights.get(group_name, 1.0)
++                    if self.config.action_loss_group_weights is not None
++                    else 1.0
++                )
++                for group_name in self.config.action_loss_groups
++            }
++            weight_sum = sum(weights.values())
++            grouped_loss = sum(weights[name] * group_losses[name] for name in group_losses) / weight_sum
++
++            per_sample_weight_sum = torch.zeros(losses.shape[0], dtype=losses.dtype, device=losses.device)
++            grouped_per_sample_loss = torch.zeros_like(per_sample_weight_sum)
++            for group_name in group_per_sample_losses:
++                available = group_available_per_sample[group_name].to(losses.dtype)
++                group_weight = weights[group_name]
++                grouped_per_sample_loss = (
++                    grouped_per_sample_loss + group_weight * group_per_sample_losses[group_name] * available
++                )
++                per_sample_weight_sum = per_sample_weight_sum + group_weight * available
++            grouped_per_sample_loss = grouped_per_sample_loss / per_sample_weight_sum.clamp_min(1)
++
++            if self.config.quaternion_geodesic_weight > 0:
++                if flow_outputs is None:
++                    raise RuntimeError("Flow outputs are required for quaternion geometry loss.")
++                if reconstructed_actions is None:
++                    raise RuntimeError(
++                        "Reconstructed flow actions are required for quaternion geometry loss."
++                    )
++                quaternion_group = self.config.quaternion_geodesic_group
++                quaternion_indices = self.config.action_loss_groups[quaternion_group]
++                quaternion_index_tensor = torch.as_tensor(
++                    quaternion_indices, dtype=torch.long, device=losses.device
++                )
++
++                predicted_quaternion = torch.index_select(
++                    reconstructed_actions, dim=-1, index=quaternion_index_tensor
++                )
++                target_quaternion = torch.index_select(target_actions, dim=-1, index=quaternion_index_tensor)
++
++                quaternion_mean = torch.as_tensor(
++                    self.config.quaternion_action_mean,
++                    dtype=predicted_quaternion.dtype,
++                    device=predicted_quaternion.device,
++                )
++                quaternion_std = torch.as_tensor(
++                    self.config.quaternion_action_std,
++                    dtype=predicted_quaternion.dtype,
++                    device=predicted_quaternion.device,
++                )
++                predicted_quaternion = predicted_quaternion * quaternion_std + quaternion_mean
++                target_quaternion = target_quaternion * quaternion_std + quaternion_mean
++                predicted_quaternion = F.normalize(predicted_quaternion, dim=-1, eps=1e-8)
++                target_quaternion = F.normalize(target_quaternion, dim=-1, eps=1e-8)
++
++                quaternion_dot = (predicted_quaternion * target_quaternion).sum(dim=-1)
++                quaternion_geometry_values = 1.0 - quaternion_dot.square().clamp(max=1.0)
++                quaternion_valid = group_masks[quaternion_group]
++                quaternion_valid_count = quaternion_valid.sum()
++                quaternion_geometry_loss = (
++                    quaternion_geometry_values * quaternion_valid
++                ).sum() / quaternion_valid_count.clamp_min(1)
++
++                quaternion_per_sample_count = quaternion_valid.sum(dim=1)
++                quaternion_geometry_per_sample = (quaternion_geometry_values * quaternion_valid).sum(
++                    dim=1
++                ) / quaternion_per_sample_count.clamp_min(1)
++
++                grouped_loss = grouped_loss + (
++                    self.config.quaternion_geodesic_weight * quaternion_geometry_loss
++                )
++                grouped_per_sample_loss = grouped_per_sample_loss + (
++                    self.config.quaternion_geodesic_weight * quaternion_geometry_per_sample
++                )
++                loss_dict["loss_quaternion_geodesic"] = quaternion_geometry_loss.detach().item()
++
++            if self.config.relative_xyz_anchor_weight > 0:
++                if reconstructed_actions is None:
++                    raise RuntimeError("Reconstructed flow actions are required for relative XYZ anchoring.")
++                anchor_group = self.config.relative_xyz_group
++                anchor_indices = torch.as_tensor(
++                    self.config.relative_xyz_action_indices,
++                    dtype=torch.long,
++                    device=losses.device,
++                )
++                predicted_first_xyz = torch.index_select(
++                    reconstructed_actions[:, 0], dim=-1, index=anchor_indices
++                )
++                target_first_xyz = torch.index_select(target_actions[:, 0], dim=-1, index=anchor_indices)
++                anchor_values = F.smooth_l1_loss(
++                    predicted_first_xyz,
++                    target_first_xyz,
++                    reduction="none",
++                    beta=self.config.relative_xyz_anchor_huber_beta,
++                )
++                anchor_valid = group_masks[anchor_group][:, 0]
++                anchor_value_weights = anchor_valid.unsqueeze(-1).to(dtype=anchor_values.dtype)
++                anchor_count = anchor_value_weights.sum() * anchor_values.shape[-1]
++                anchor_loss = (anchor_values * anchor_value_weights).sum() / anchor_count.clamp_min(1)
++                anchor_per_sample = (anchor_values * anchor_value_weights).sum(dim=-1) / anchor_values.shape[
++                    -1
++                ]
++                anchor_per_sample = anchor_per_sample * anchor_valid.to(dtype=anchor_per_sample.dtype)
++
++                grouped_loss = grouped_loss + self.config.relative_xyz_anchor_weight * anchor_loss
++                grouped_per_sample_loss = grouped_per_sample_loss + (
++                    self.config.relative_xyz_anchor_weight * anchor_per_sample
++                )
++                loss_dict["loss_relative_xyz_anchor"] = anchor_loss.detach().item()
++
++            loss_dict["loss"] = grouped_loss.detach().item()
++            if reduction == "none":
++                return grouped_per_sample_loss, loss_dict
++            return grouped_loss, loss_dict
+ 
+         if actions_is_pad is not None:
+             in_episode_bound = ~actions_is_pad
+@@ -411,6 +928,28 @@
+                 loss = losses.sum() / num_valid
+             loss_dict["loss"] = loss.item()
+             return loss, loss_dict
++
++    def prepare_dense_image(self, batch) -> Tensor | None:
++        """Return the latest unmodified RGB frame for the parallel DINO branch."""
++        if not getattr(self.config, "dense_vision_enabled", False):
++            return None
++        key = self.config.dense_vision_image_key
++        if key not in batch:
++            raise KeyError(f"dense vision image is missing from the batch: {key!r}")
++        image = batch[key]
++        if image.ndim == 5:
++            if image.shape[1] != self.config.n_obs_steps:
++                raise ValueError(
++                    "dense vision observation horizon differs from n_obs_steps: "
++                    f"{tuple(image.shape)}"
++                )
++            image = image[:, -1]
++        if image.ndim != 4 or image.shape[1:] != (3, 720, 1280):
++            raise ValueError(
++                "dense vision requires the original BCHW RGB frame at 720x1280; "
++                f"got {tuple(image.shape)}"
++            )
++        return image
+ 
+     def prepare_images(self, batch):
+         """Apply SmolVLA preprocessing to the images, like resizing to 224x224 and padding to keep aspect ratio, and
+@@ -593,7 +1132,40 @@
+             self.vlm_with_expert.expert_hidden_size, self.vlm_with_expert.expert_hidden_size
+         )
+ 
++        self.dense_vision_encoder: DenseDinoVisionEncoder | None = None
++        self.dense_cross_attention: GatedDenseCrossAttention | None = None
++        if self.config.dense_vision_enabled:
++            hidden_dim = self.vlm_with_expert.expert_hidden_size
++            if hidden_dim % self.config.dense_vision_cross_attention_heads != 0:
++                raise ValueError(
++                    f"action expert hidden size {hidden_dim} is not divisible by dense attention "
++                    f"heads {self.config.dense_vision_cross_attention_heads}"
++                )
++            self.dense_vision_encoder = DenseDinoVisionEncoder(
++                repository=self.config.dense_vision_repository,
++                repository_sha256=self.config.dense_vision_repository_sha256,
++                weights_path=self.config.dense_vision_weights_path,
++                weights_sha256=self.config.dense_vision_weights_sha256,
++                model_type=self.config.dense_vision_model_type,
++                roi_xyxy=self.config.dense_vision_roi_xyxy,
++                image_size=self.config.dense_vision_image_size,
++                patch_size=self.config.dense_vision_patch_size,
++                output_dim=hidden_dim,
++                adapter_dropout=self.config.dense_vision_adapter_dropout,
++                freeze_backbone=self.config.dense_vision_freeze_backbone,
++                backbone_dtype=self.config.dense_vision_backbone_dtype,
++                color_jitter=self.config.dense_vision_color_jitter,
++            )
++            self.dense_cross_attention = GatedDenseCrossAttention(
++                hidden_dim=hidden_dim,
++                num_heads=self.config.dense_vision_cross_attention_heads,
++                dropout=self.config.dense_vision_cross_attention_dropout,
++                gate_init=self.config.dense_vision_gate_init,
++            )
++
+         self.set_requires_grad()
++        if self.config.dense_vision_enabled and self.config.dense_vision_freeze_base_policy:
++            self.freeze_base_policy_for_dense_tuning()
+         self.fake_image_token = self.vlm_with_expert.processor.tokenizer.fake_image_token_id
+         self.global_image_token = self.vlm_with_expert.processor.tokenizer.global_image_token_id
+         self.global_image_start_token = torch.tensor(
+@@ -617,6 +1189,20 @@
+     def set_requires_grad(self):
+         for params in self.state_proj.parameters():
+             params.requires_grad = self.config.train_state_proj
++
++    def freeze_base_policy_for_dense_tuning(self) -> None:
++        """Freeze every pre-existing SmolVLA tensor for stage-1 dense tuning."""
++        base_modules = (
++            self.vlm_with_expert,
++            self.state_proj,
++            self.action_in_proj,
++            self.action_out_proj,
++            self.action_time_mlp_in,
++            self.action_time_mlp_out,
++        )
++        for module in base_modules:
++            for parameter in module.parameters():
++                parameter.requires_grad = False
+ 
+     def sample_noise(self, shape, device):
+         noise = torch.normal(
+@@ -633,6 +1219,29 @@
+         time_beta = beta_dist.sample((bsize,)).to(device=device, dtype=torch.float32)
+         time = time_beta * 0.999 + 0.001
+         return time
++
++    def encode_dense_image(self, dense_image: Tensor | None, *, training: bool) -> Tensor | None:
++        if self.dense_vision_encoder is None:
++            return None
++        if dense_image is None:
++            raise ValueError("dense vision is enabled but its raw RGB image is missing")
++        return self.dense_vision_encoder(dense_image, training=training)
++
++    def fuse_dense_tokens(
++        self,
++        action_tokens: Tensor,
++        dense_tokens: Tensor | None = None,
++        projected_context: tuple[Tensor, Tensor] | None = None,
++    ) -> Tensor:
++        if self.dense_cross_attention is None:
++            return action_tokens
++        if dense_tokens is None and projected_context is None:
++            raise ValueError("dense vision is enabled but its patch tokens are missing")
++        return self.dense_cross_attention(
++            action_tokens,
++            dense_tokens=dense_tokens,
++            projected_context=projected_context,
++        )
+ 
+     def embed_prefix(
+         self, images, img_masks, lang_tokens, lang_masks, state: torch.Tensor = None
+@@ -772,8 +1381,18 @@
+         return embs, pad_masks, att_masks
+ 
+     def forward(
+-        self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None
+-    ) -> Tensor:
++        self,
++        images,
++        img_masks,
++        lang_tokens,
++        lang_masks,
++        state,
++        actions,
++        noise=None,
++        time=None,
++        return_flow_outputs: bool = False,
++        dense_image: Tensor | None = None,
++    ) -> Tensor | tuple[Tensor, dict[str, Tensor]]:
+         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
+         if noise is None:
+             noise = self.sample_noise(actions.shape, actions.device)
+@@ -784,6 +1403,7 @@
+         time_expanded = time[:, None, None]
+         x_t = time_expanded * noise + (1 - time_expanded) * actions
+         u_t = noise - actions
++        dense_tokens = self.encode_dense_image(dense_image, training=self.training)
+         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+             images, img_masks, lang_tokens, lang_masks, state=state
+         )
+@@ -805,8 +1425,11 @@
+         suffix_out = suffix_out[:, -self.config.chunk_size :]
+         # Original openpi code, upcast attention output
+         suffix_out = suffix_out.to(dtype=torch.float32)
++        suffix_out = self.fuse_dense_tokens(suffix_out, dense_tokens)
+         v_t = self.action_out_proj(suffix_out)
+         losses = F.mse_loss(u_t, v_t, reduction="none")
++        if return_flow_outputs:
++            return losses, {"x_t": x_t, "v_t": v_t, "time": time}
+         return losses
+ 
+     def sample_actions(
+@@ -817,6 +1440,7 @@
+         lang_masks,
+         state,
+         noise=None,
++        dense_image: Tensor | None = None,
+         **kwargs: Unpack[ActionSelectKwargs],
+     ) -> Tensor:
+         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
+@@ -826,6 +1450,13 @@
+         if noise is None:
+             actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
+             noise = self.sample_noise(actions_shape, device)
++
++        dense_tokens = self.encode_dense_image(dense_image, training=False)
++        dense_context = (
++            self.dense_cross_attention.prepare_context(dense_tokens)
++            if self.dense_cross_attention is not None
++            else None
++        )
+ 
+         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+             images, img_masks, lang_tokens, lang_masks, state=state
+@@ -855,6 +1486,7 @@
+                     prefix_pad_masks=prefix_pad_masks,
+                     past_key_values=past_key_values,
+                     timestep=current_timestep,
++                    dense_context=dense_context,
+                 )
+ 
+             if self._rtc_enabled():
+@@ -886,6 +1518,7 @@
+         past_key_values,
+         x_t,
+         timestep,
++        dense_context=None,
+     ):
+         """Apply one denoising step of the noise `x_t` at a given timestep."""
+         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(x_t, timestep)
+@@ -912,5 +1545,6 @@
+         suffix_out = outputs_embeds[1]
+         suffix_out = suffix_out[:, -self.config.chunk_size :]
+         suffix_out = suffix_out.to(dtype=torch.float32)
++        suffix_out = self.fuse_dense_tokens(suffix_out, projected_context=dense_context)
+         v_t = self.action_out_proj(suffix_out)
+         return v_t

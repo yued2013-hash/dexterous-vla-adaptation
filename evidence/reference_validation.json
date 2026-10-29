@@ -1,0 +1,10 @@
+{
+  "tests_run": 12,
+  "failures": 0,
+  "errors": 0,
+  "scope": "Independent NumPy/SciPy contract references; not original model/GPU or real-robot evaluation",
+  "python": "3.14.0",
+  "numpy": "2.4.6",
+  "scipy": "1.18.1",
+  "historical_model_tests_reported_separately": 32
+}

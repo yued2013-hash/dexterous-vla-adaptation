@@ -1,0 +1,57 @@
+{
+  "representation_manifest": "${LOCAL_ARTIFACTS}/nero_selected66_10hz_chunk16_stats.json",
+  "representation_manifest_sha256": "e60274ec5a3d85f195c801cb0d3f1f9ffcbad25382bab3f2a4d516974f20475b",
+  "dataset_aggregate_sha256": "23b542ea16e0ffe5a876758f1cf9941fa6f77e53cca5d203d431ce9c72245703",
+  "dataset_provenance_file_count": 136,
+  "dataset_provenance_total_bytes": 592894582,
+  "dataset_provenance_groups": {
+    "data_parquet": {
+      "file_count": 66,
+      "total_bytes": 3749485,
+      "aggregate_sha256": "86a0ab0f0d460db93193e72f137f3ce498f74408084abdd108d2beb412d8b614"
+    },
+    "training_videos": {
+      "file_count": 66,
+      "total_bytes": 588900661,
+      "aggregate_sha256": "393716f638a554d49f489cb43bf1bb55b24cf535f34a1f3202eacc37bad8633b"
+    },
+    "metadata_episodes": {
+      "file_count": 1,
+      "total_bytes": 225612,
+      "aggregate_sha256": "121a056455dac99277f85ebcc78d97d27cfc528a1254c6ab4c931d7f678cb2f6"
+    },
+    "metadata_tasks": {
+      "file_count": 1,
+      "total_bytes": 2705,
+      "aggregate_sha256": "452f29e5341a777bf0c8094524e1cb526f33de02aa5b5602bd1c36f26d3ac2b6"
+    },
+    "metadata_info_stats": {
+      "file_count": 2,
+      "total_bytes": 16119,
+      "aggregate_sha256": "5ab124312f9cd0de6d8aa2cbcbcc11f2c9062bf4f306f51caa24ef17bded05dd"
+    }
+  },
+  "epochs": 300,
+  "steps_per_epoch": 364,
+  "global_batch_size": 64,
+  "launch_mixed_precision": "bf16",
+  "ddp_even_batch_duplicates_per_epoch": 13,
+  "group_loss_ddp_reduction": "exact global scalar-element mean via detached count all-reduce",
+  "normalization": "JC limits [-1,1] with range_eps=1e-4",
+  "state_limits_constant_indices": [],
+  "action_limits_constant_indices": [],
+  "episode_tail_padding": "repeat final action and include all 16 horizons in loss",
+  "training_parquet_io": "valid1 + xyz3 + quaternion_wxyz4 + valid1 + nero_hand16",
+  "online_policy_io": "absolute xyz3 + rotation6D6 + canonical_hand16",
+  "online_execution_steps_before_replan": 6,
+  "save_every_epochs": 50,
+  "initialization": {
+    "vlm": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct pretrained weights",
+    "action_expert_and_state_projection": "random initialization",
+    "warm_start_checkpoint": null,
+    "reason": "The historical chunk50 checkpoint predicts absolute xyz+quaternion actions and has a different action horizon, so reusing its expert would confound this representation experiment."
+  },
+  "dataloader_workers": 8,
+  "persistent_workers": false,
+  "persistent_workers_reason": "Avoid intermittent PyAV fork-worker launcher teardown hangs."
+}

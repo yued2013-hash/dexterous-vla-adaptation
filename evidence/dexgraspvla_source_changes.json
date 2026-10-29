@@ -1,0 +1,224 @@
+[
+  {
+    "path": "attention_map_visualizer.py",
+    "status": "modified",
+    "source_sha256": "53eca835f89a4234ab972233bbb5f48b9eb9eaa4e249aefff6d7c4f7be402514",
+    "base_sha256": "eb8773fcb72fcdf233cae1e292e5285db44ca6c24a4a581f6ca24dfdae286ee5"
+  },
+  {
+    "path": "compare_action_chunks.py",
+    "status": "added",
+    "source_sha256": "d619b18aa0b57ea96c93b99b25089afbf5dd722f68955d8235af4113864b23cf",
+    "base_sha256": null
+  },
+  {
+    "path": "inference.py",
+    "status": "modified",
+    "source_sha256": "865b5598cc027af2d0088a78f46c6c04c2e0aea639e0e92c440fa3ada4a82d32",
+    "base_sha256": "fb2719d1e48ce654f4a17a578c267815dc8a98d84cf6575e6849650e398431ae"
+  },
+  {
+    "path": "online_inference.py",
+    "status": "added",
+    "source_sha256": "1cf1d8339b31265cb7fd1d6939b5a9711dbdd57b667a884d109681b46e3a0708",
+    "base_sha256": null
+  },
+  {
+    "path": "plot_training_curves.py",
+    "status": "added",
+    "source_sha256": "f9c5f40f33d7730b0fddd96ef87d1d17f5b929ace670d6957bed822d9edd2e94",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/audit_compact_nero_dataset.py",
+    "status": "added",
+    "source_sha256": "8e39cec3859d2f844b3150a0d4418b58e3de0e9d22819d6d28a0701b79d44544",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/audit_selected66_raw_provenance.py",
+    "status": "added",
+    "source_sha256": "bde84814933e014ee481b96aa3a8353cd66fb5aa868498a624e0848e6adb2de6",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/cache_lerobot_frames.py",
+    "status": "added",
+    "source_sha256": "2a39ea2cbdf9f918042bd22cbc43d5e42a5c35ca301c80925622ec19aea6399f",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/convert_nero_aligned_to_lerobot_v3.py",
+    "status": "added",
+    "source_sha256": "8d18525276afe761cbe99d1a06854b5270e9f7a5984cef7682754d6c0146ec51",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/convert_nero_selected_with_force_to_lerobot_v3.py",
+    "status": "added",
+    "source_sha256": "ef29f446737a8e4bfffebf6fc092a6e7e044c7310ce958edbcf0ffb631925320",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/inspect_squeeze_toothpaste_data.py",
+    "status": "added",
+    "source_sha256": "473dee75fbab06b1f6ce35cd99ca083af2d44cbb3753c8d8bd36037dc295af02",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/replay_episode_with_force.py",
+    "status": "added",
+    "source_sha256": "49a68a5ba1f0a805e16f52694d377329a0f786c82b67d6d506cb9c644a67c6f4",
+    "base_sha256": null
+  },
+  {
+    "path": "data_process/smoke_position_force_training.py",
+    "status": "added",
+    "source_sha256": "fec90b7092b052d780858570e20a737eea76c102f634596b40ba9083d013819d",
+    "base_sha256": null
+  },
+  {
+    "path": "inference_utils/example_hardware_adapter.py",
+    "status": "added",
+    "source_sha256": "e8e2e7c6a8c87d8ede0140ddecba934304866e90d90d43140d2c794fa873e03c",
+    "base_sha256": null
+  },
+  {
+    "path": "inference_utils/robot_adapter.py",
+    "status": "added",
+    "source_sha256": "80c308eb427750b2036247a8961cdc3bfb9db6b0d272aec888c13489338b21bf",
+    "base_sha256": null
+  },
+  {
+    "path": "inference_utils/utils.py",
+    "status": "modified",
+    "source_sha256": "e4bea3a0a6f56bbe1bc56d273716b49c50ae111f96d83cbf2d99436493f9a629",
+    "base_sha256": "2dfddaf03aa47d72f943bdd55afaa00157bfca9cff92ce97b73f25bd9e730e76"
+  },
+  {
+    "path": "tests/test_inference_static.py",
+    "status": "added",
+    "source_sha256": "631bd7c485e832d5abbbb54aa9f9104bde899fd383e9294ab048cb043633f4eb",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/test_online_inference.py",
+    "status": "added",
+    "source_sha256": "e6ae55bdaa6b6c5a431997b85fba1fb0d98d6404d1e0ed108f166e8c26c4618f",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/test_plot_training_curves.py",
+    "status": "added",
+    "source_sha256": "238842ab15fadc4d456fdd6b0c9bf40e3063bb6920c41d350dca554e02eae6c7",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/data_process/test_cache_lerobot_frames.py",
+    "status": "added",
+    "source_sha256": "f978ed53391dbbd98c2e14611b319c4f82862dc3c079c28bb72d4932bb5582a5",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/data_process/test_convert_nero_aligned_to_lerobot_v3.py",
+    "status": "added",
+    "source_sha256": "804dd2cd80ed6027be2a93006498e3c2452a6a5e0c2b153478f4124720e5c38e",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/data_process/test_convert_nero_selected_with_force_to_lerobot_v3.py",
+    "status": "added",
+    "source_sha256": "b6c02afa3afde90e475a0004da08aa27681f78bd0e0c223fcba1ed4155f6774e",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/data_process/test_replay_episode_with_force.py",
+    "status": "added",
+    "source_sha256": "775cfa9390307962207b57a713c3ff0481f4d7945355eca37803d2501f8ea4f4",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/controller/common/test_state_layout.py",
+    "status": "added",
+    "source_sha256": "bdfb78f44dd6f04dd21eb28dd7a527d4cd610827a80a4c07c8aac345a76d85e2",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/controller/config/test_configs_load.py",
+    "status": "added",
+    "source_sha256": "65cc8ea67ff2afcb688c21647f75934ec7fd2093e4bdfca0a7297a1acd231a95",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/controller/dataset/test_lerobot_image_dataset.py",
+    "status": "added",
+    "source_sha256": "5e3c837c2185d2593ac170dd7dd14c217c516c54af235c29fc584e70a73e950c",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/controller/policy/test_dexgraspvla_controller.py",
+    "status": "added",
+    "source_sha256": "294822026ffe6daada70b56ac040a3fb8f5bc0e9a4cb114b9237e5097a1ecd63",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/controller/model/diffusion/test_flow_matching.py",
+    "status": "added",
+    "source_sha256": "31afb041835a3cc709aed70e0778c4d035b634e8070af1e53cab9db32fec13fb",
+    "base_sha256": null
+  },
+  {
+    "path": "tests/controller/model/vision/test_obs_encoder.py",
+    "status": "added",
+    "source_sha256": "d75f338a8f9c25b063cb2ba88d8d8e7bd54167b7c77ab9d6eb0b2656555f430b",
+    "base_sha256": null
+  },
+  {
+    "path": "controller/common/state_layout.py",
+    "status": "added",
+    "source_sha256": "6efbcd0421a79aff10ff6c7e34fea8cd6862aaea1e16c8a313a7fee9fcd4e10c",
+    "base_sha256": null
+  },
+  {
+    "path": "controller/dataset/lerobot_image_dataset.py",
+    "status": "added",
+    "source_sha256": "658f1b2cb55a210e02aadd96eaaba214e9bc545702fe878ebd600312704fdc1f",
+    "base_sha256": null
+  },
+  {
+    "path": "controller/dataset/lerobot_metadata.py",
+    "status": "added",
+    "source_sha256": "72f1477e005935cedd3e3dc199590e29c3071c780a93396a887e1a527c869cfd",
+    "base_sha256": null
+  },
+  {
+    "path": "controller/dataset/lerobot_video.py",
+    "status": "added",
+    "source_sha256": "5b7cca135e20ac9bcc46358a829154a666527b33540f5a56bfec8e6b390e2241",
+    "base_sha256": null
+  },
+  {
+    "path": "controller/policy/dexgraspvla_controller.py",
+    "status": "modified",
+    "source_sha256": "f881c617dcb504813a79f9e6c57cd6f8d8dc630f0db1175260fea607bc31db0c",
+    "base_sha256": "7abd79c41544ed958833add17829fd9269c93e7a8466bcfddc7f92296eabd4db"
+  },
+  {
+    "path": "controller/workspace/train_dexgraspvla_controller_workspace.py",
+    "status": "modified",
+    "source_sha256": "0885a3e2faa59d179bc245dcb3ecf64d142ecf113eca5e9c9b5a9be1de78e6ef",
+    "base_sha256": "f38df7a6cffa61484537f5c724e271c3bacc6bea7b82f572b9b371dc4da06dff"
+  },
+  {
+    "path": "controller/model/diffusion/flow_matching.py",
+    "status": "added",
+    "source_sha256": "dae707f1d010d894bf505e18c87386dde6fb82754a6c1e32fc02327f8bb9d752",
+    "base_sha256": null
+  },
+  {
+    "path": "controller/model/vision/obs_encoder.py",
+    "status": "modified",
+    "source_sha256": "3765cc30f0744ae4fabcff7fa6d9664b5825ee2e6193c12ae8279b0c8bd85f70",
+    "base_sha256": "66301c9a9a07eb7724fb36015a435e8c946c5e4b30a2d05560afef37e5b74e7f"
+  }
+]

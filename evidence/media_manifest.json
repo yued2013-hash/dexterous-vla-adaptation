@@ -1,0 +1,14 @@
+{
+  "width": 960,
+  "height": 540,
+  "fps": 30.0,
+  "frames": 779,
+  "seconds": 25.966666666666665,
+  "original_sha256": "15ced4c35218bfe2598b3552f9c46e425f47f184598b4cc9e9e5fc29aef540f8",
+  "published_sha256": "16b356d89aac51b85a5acb5ba26a10cb877a3e5ca9e14c3814a4bef2fa441922",
+  "published_codec": "H264/AVC",
+  "audio_removed": true,
+  "model_variant": null,
+  "checkpoint": null,
+  "success_rate": null
+}

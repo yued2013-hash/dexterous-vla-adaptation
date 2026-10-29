@@ -1,0 +1,118 @@
+[
+  {
+    "dataset": "${LOCAL_ARTIFACTS}/nero_aligned_10hz",
+    "status": "PASS",
+    "fps": 10,
+    "episodes": 61,
+    "frames": 20792,
+    "video_shapes_hwc": [
+      [
+        720,
+        1280,
+        3
+      ]
+    ],
+    "state_semantic": "robot_feedback",
+    "action_semantic": "teleoperation_command",
+    "state_action_feature_order_equal": true,
+    "exact_same_state_action_row_fraction": 0.0,
+    "same_time_mae": {
+      "xyz_m": 0.013367920253571123,
+      "rotation_geodesic_deg": 3.2140793545949053,
+      "hand_device_units": 12.137249214738453
+    },
+    "action_to_next_robot_state_mae": {
+      "xyz_m": 0.010883807220975813,
+      "rotation_geodesic_deg": 2.381124967058899,
+      "hand_device_units": 11.70445282363493
+    },
+    "state_range": {
+      "xyz_min": [
+        -0.5027232766151428,
+        -0.2962757349014282,
+        0.07601664215326309
+      ],
+      "xyz_max": [
+        -0.07607363909482956,
+        0.41198888421058655,
+        0.4957978427410126
+      ],
+      "hand_min": 0.0,
+      "hand_max": 255.0
+    },
+    "action_range": {
+      "xyz_min": [
+        -0.5096157193183899,
+        -0.2897588312625885,
+        0.06136031076312065
+      ],
+      "xyz_max": [
+        -0.06558921933174133,
+        0.41957369446754456,
+        0.49071455001831055
+      ],
+      "hand_min": 0.0,
+      "hand_max": 254.64407348632812
+    },
+    "rgb_repeated_frame_count_from_metadata": 0,
+    "rgb_nearest_error_max_ms_from_metadata": 0.0
+  },
+  {
+    "dataset": "${LOCAL_ARTIFACTS}/nero_20260803_selected66_10hz",
+    "status": "PASS",
+    "fps": 10,
+    "episodes": 66,
+    "frames": 23283,
+    "video_shapes_hwc": [
+      [
+        720,
+        1280,
+        3
+      ]
+    ],
+    "state_semantic": "robot_feedback",
+    "action_semantic": "teleoperation_command",
+    "state_action_feature_order_equal": true,
+    "exact_same_state_action_row_fraction": 0.0,
+    "same_time_mae": {
+      "xyz_m": 0.014099832791271518,
+      "rotation_geodesic_deg": 3.042015880253478,
+      "hand_device_units": 10.592231506735205
+    },
+    "action_to_next_robot_state_mae": {
+      "xyz_m": 0.011726448561389914,
+      "rotation_geodesic_deg": 2.254419897591034,
+      "hand_device_units": 10.184221820484607
+    },
+    "state_range": {
+      "xyz_min": [
+        -0.52108234167099,
+        -0.19302761554718018,
+        0.07189034670591354
+      ],
+      "xyz_max": [
+        -0.08652769774198532,
+        0.510280430316925,
+        0.5409026741981506
+      ],
+      "hand_min": 1.0,
+      "hand_max": 252.0
+    },
+    "action_range": {
+      "xyz_min": [
+        -0.5214528441429138,
+        -0.1916094869375229,
+        0.07027347385883331
+      ],
+      "xyz_max": [
+        -0.06715057045221329,
+        0.51189786195755,
+        0.5525758862495422
+      ],
+      "hand_min": 0.0,
+      "hand_max": 255.0
+    },
+    "rgb_repeated_frame_count_from_metadata": 41,
+    "rgb_nearest_error_max_ms_from_metadata": 157.392896
+  }
+]
