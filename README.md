@@ -6,6 +6,18 @@
 
 ![Real-robot demonstration](docs/media/poster.jpg)
 
+## 快速浏览
+
+| 阅读目标 | 入口 |
+| --- | --- |
+| 看整体流程与实机片段 | [项目展示](https://yued2013-hash.github.io/dexterous-vla-adaptation/) |
+| 理解相对位姿、稠密视觉与位姿/力建模 | [方法说明](docs/method.md) |
+| 查看可审查的代码改动 | [DINO融合模块](integrations/smolvla/modules/dense_vision.py) · [位姿模块](integrations/smolvla/modules/relative_pose.py) · [补丁](integrations/smolvla/patches/) |
+| 区分已实现、历史验证与待评估内容 | [证据范围](docs/evidence.md) · [训练记录](docs/training.md) |
+
+**工作重点：** 基于社区实现完成表示/训练接口适配与视觉、力预测扩展。已有材料支持实现和部分训练路径验证；视频未关联确定检查点，不据此报告模型成功率或模块收益。
+
+
 ## 项目范围
 
 基于社区的 [LeRobot/SmolVLA](https://github.com/huggingface/lerobot) 与 [DexGraspVLA](https://github.com/Psi-Robot/DexGraspVLA) 开展单臂灵巧操作适配。两个代码包与实机视频属于同一个项目的不同材料，这里统一整理数据/动作接口、视觉扩展、训练实现和已有审计记录。
@@ -76,3 +88,4 @@ DexGraspVLA适配分支为planner-free的低层视觉动作策略，不包含原
 ## 来源
 
 来源、固定版本标记、代码快照SHA与分发范围见 [provenance](docs/provenance.md) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。原始示教数据、基础模型权重、机器人SDK、设备地址和训练机器路径均不打包。
+
