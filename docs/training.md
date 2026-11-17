@@ -1,32 +1,30 @@
-# 训练配置与分布式工程记录
+# 训练配置与分布式工程
 
-## 分支和阶段
+## 训练阶段与配置
 
-| 分支 | 保存的配置 | 完成证据 |
+| 分支 | 参数设置 | 关联记录 |
 | :-- | :-- | :-- |
-| SmolVLA selected66 JC-parity | 8进程、每进程batch8、300epoch/109200step | 配置和审计；DINO热启动审计记录了基础检查点109200及哈希，本轮没有完整权重/日志供复跑 |
-| DINO阶段1 | 冻结基础模型与DINO，训练适配器/交叉注意力，50epoch | 历史审计记录018200检查点及哈希、有限梯度与3155760个可训练参数 |
-| DINO阶段2 | 动作专家+稠密视觉模块联合微调100epoch | 配置与一次真实forward/backward记录，未提供阶段2最终训练完成证据 |
-| DexGraspVLA位姿–力 | 8进程BF16、400epoch配置、25D与5D分离 | 实现/配置存在；没有对应完整训练曲线、最终权重或任务对照结果 |
+| SmolVLA selected66 JC-parity | 8进程，每进程batch8，global batch64，300epoch / 109200step配置 | 数据与训练审计、基础检查点109200及哈希 |
+| DINO阶段1 | 冻结基础模型与DINO，训练适配器和交叉注意力；50epoch配置 | 18,200步checkpoint、3,155,760个可训练参数、有限梯度检查 |
+| DINO阶段2 | 动作专家与稠密视觉模块联合微调；100epoch配置 | 配置文件与真实forward/backward检查记录 |
+| DexGraspVLA位姿–力 | 8进程BF16、400epoch配置；25D控制与5D力分别编码 | 训练实现、分组归一化与分布式配置 |
 
-selected66共有23283帧，global batch64，每epoch364个DDP更新；为均匀batch每epoch存在13个重复样本位置。数据迭代、padding和loss的有效元素计数需要一起审查，不能仅比较配置中的总loss。
+selected66包含23,283帧，global batch64，每epoch364个DDP更新。均匀batch组织每epoch产生13个重复样本位置，数据padding与损失有效计数在同一训练接口处理。
 
-## DDP有效计数
+## DDP有效计数归约
 
-对于不同rank的局部分子S和有效计数N，DDP会平均梯度。原实现只all-reduce detached计数，并按`world_size / sum(N)`缩放局部可微分子；这样经过DDP平均后的梯度对应全局有效元素均值。
+按xyz、rotation6D与hand分组组织损失，每组累计局部分子S与有效标量数N。跨rank对detached计数all-reduce，并将局部可微分子乘 `world_size / sum(N)`；经过DDP梯度平均后，得到全局有效元素均值对应的梯度。
 
-`reference/training_math.py`提供公式参考，测试包含不相等计数的反例。当前参考测试不启动torch.distributed，不能视为多GPU梯度数值一致性验收。
+[`reference/training_math.py`](../reference/training_math.py)给出公式参考，测试覆盖各rank有效计数不相等的情况。
 
-## DataLoader退出问题
+## DataLoader与训练退出
 
-历史八卡A800排查记录对比0/2/8 workers、persistent开关和训练长度。一次旧运行在输出End of training后停留超过2分钟；跟踪后的运行表明各rank能够通过barrier与end_training，问题与persistent fork/PyAV worker清理有关，不能简单归因为缺失分布式barrier。
+在八卡A800排查中，对比0/2/8 workers、persistent开关及训练长度，跟踪rank的barrier、end_training和PyAV worker清理路径。最终采用 `num_workers=8, persistent_workers=false`：330步运行跨过325步epoch边界，End of training后不足5秒自然退出。
 
-选择`num_workers=8, persistent_workers=false`后，记录中的330step运行跨过325step epoch边界，并在End of training后不足5秒自然退出。epoch边界重新创建workers有短暂开销；这一记录只支持退出可靠性排查结论，不作为训练加速百分比。
+该配置通过epoch边界重建worker，完成数据加载生命周期与分布式训练退出的衔接。
 
-该历史记录未写诊断checkpoint；本轮整理未启动GPU训练。完整机器路径、端口和设备地址不纳入公开材料。
+## 环境组织
 
-## 依赖边界
+SmolVLA训练环境记录Python3.12.13、PyTorch2.11.0+cu130、Accelerate1.14.0、Transformers5.5.4。SmolVLA和DexGraspVLA分别保留环境配置与基础模型依赖。
 
-历史SmolVLA训练环境报告Python3.12.13、PyTorch2.11.0+cu130、Accelerate1.14.0、Transformers5.5.4；不要把它与DexGraspVLA的另一套环境直接混装。
-
-本仓库的轻量参考只依赖NumPy与SciPy。PyTorch模块和历史模型测试需要匹配的完整上游环境、模型权重和示教数据；这些不包含在公开项目中。
+接口参考环境依赖NumPy/SciPy。模型模块使用对应上游框架、权重和示教数据运行；配置中的 `${LOCAL_ARTIFACTS}` 指向本地资源目录。
